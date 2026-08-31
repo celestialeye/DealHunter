@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DealHunter Adaptive Monitoring Architecture</title>
+    <script>
+      (() => {
+        const param = new URLSearchParams(window.location.search).get("scoutTheme");
+        const theme =
+          param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --cp-bg: #f7f4ef;
+        --cp-bg-elevated: #fcfbf8;
+        --cp-surface: #ffffff;
+        --cp-surface-soft: #f5f5f5;
+        --cp-border: #dedede;
+        --cp-border-strong: #919191;
+        --cp-text: #242424;
+        --cp-text-muted: #5c5c5c;
+        --cp-text-soft: #6f6f6f;
+        --cp-accent: #b11f4b;
+        --cp-accent-hover: #9a1a41;
+        --cp-accent-soft: rgba(177, 31, 75, 0.08);
+        --cp-accent-fg: #ffffff;
+        --cp-success: #16a34a;
+        --cp-danger: #dc2626;
+        --cp-warning: #f59e0b;
+        --cp-link: #0078d4;
+        --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+        --cp-overlay: rgba(255, 255, 255, 0.8);
+        --cp-panel: rgba(255, 255, 255, 0.86);
+        --cp-panel-strong: rgba(255, 255, 255, 0.96);
+        --cp-sheen: rgba(255, 255, 255, 0.55);
+        --cp-highlight: rgba(177, 31, 75, 0.12);
+      }
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --cp-bg: #3d3b3a;
+        --cp-bg-elevated: #343231;
+        --cp-surface: #292929;
+        --cp-surface-soft: #2e2e2e;
+        --cp-border: #474747;
+        --cp-border-strong: #5f5f5f;
+        --cp-text: #dedede;
+        --cp-text-muted: #919191;
+        --cp-text-soft: #b0b0b0;
+        --cp-accent: #fd8ea1;
+        --cp-accent-hover: #fb7b91;
+        --cp-accent-soft: rgba(253, 142, 161, 0.14);
+        --cp-accent-fg: #1a1a1a;
+        --cp-success: #4ade80;
+        --cp-danger: #f87171;
+        --cp-warning: #fbbf24;
+        --cp-link: #4da6ff;
+        --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+        --cp-overlay: rgba(41, 41, 41, 0.88);
+        --cp-panel: rgba(41, 41, 41, 0.72);
+        --cp-panel-strong: rgba(41, 41, 41, 0.96);
+        --cp-sheen: rgba(255, 255, 255, 0.04);
+        --cp-highlight: rgba(253, 142, 161, 0.12);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--cp-bg);
+        color: var(--cp-text);
+        font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+        line-height: 1.55;
+      }
+      a { color: var(--cp-link); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      button { font: inherit; }
+      code, pre { font-family: Consolas, "Courier New", Courier, monospace; }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 265px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 24px 18px;
+        overflow-y: auto;
+        border-right: 1px solid var(--cp-border);
+        background: var(--cp-bg-elevated);
+      }
+      .brand { display: flex; gap: 11px; align-items: center; margin-bottom: 26px; }
+      .brand-mark {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        border-radius: 10px;
+        color: var(--cp-accent-fg);
+        background: var(--cp-accent);
+        font-weight: 800;
+      }
+      .brand strong, .brand small { display: block; }
+      .brand strong { font-size: 15px; }
+      .brand small { color: var(--cp-text-muted); font-size: 10px; }
+      .toc-title {
+        margin: 0 0 8px;
+        color: var(--cp-text-muted);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+      .toc { display: grid; gap: 3px; }
+      .toc a {
+        padding: 8px 10px;
+        border-radius: 10px;
+        color: var(--cp-text-muted);
+        font-size: 11px;
+        font-weight: 650;
+      }
+      .toc a:hover {
+        color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+        text-decoration: none;
+      }
+      .sidebar-actions { display: flex; gap: 8px; margin-top: 22px; }
+      .control {
+        min-height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        color: var(--cp-text);
+        background: var(--cp-surface);
+        cursor: pointer;
+      }
+      main {
+        width: min(1320px, 100%);
+        min-width: 0;
+        margin: 0 auto;
+        padding: 38px 42px 80px;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(420px, .9fr);
+        gap: 34px;
+        align-items: center;
+        min-height: 510px;
+        padding: 42px;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+        box-shadow: var(--cp-shadow);
+      }
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--cp-accent);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .1em;
+        text-transform: uppercase;
+      }
+      h1, h2, h3 { line-height: 1.15; }
+      h1 {
+        margin: 0 0 18px;
+        font-size: clamp(40px, 5vw, 70px);
+        letter-spacing: -.05em;
+      }
+      h2 { margin: 0 0 8px; font-size: clamp(25px, 3vw, 38px); letter-spacing: -.03em; }
+      h3 { margin: 0 0 7px; font-size: 15px; }
+      p { margin-top: 0; }
+      .lede { color: var(--cp-text-muted); font-size: 17px; }
+      .decision {
+        margin-top: 24px;
+        padding: 16px 18px;
+        border-left: 4px solid var(--cp-accent);
+        border-radius: 10px;
+        background: var(--cp-accent-soft);
+      }
+      .decision strong { display: block; margin-bottom: 3px; }
+      .hero svg, .diagram svg { display: block; width: 100%; height: auto; }
+      .section { padding-top: 76px; scroll-margin-top: 18px; }
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, .42fr);
+        gap: 24px;
+        align-items: end;
+        margin-bottom: 22px;
+      }
+      .section-head p { margin: 0; color: var(--cp-text-muted); }
+      .section-number {
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .grid-2, .grid-3, .grid-4 { display: grid; gap: 14px; }
+      .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .card {
+        padding: 20px;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+        box-shadow: 0 0 2px var(--cp-border), 0 1px 2px var(--cp-border);
+      }
+      .muted { color: var(--cp-text-muted); }
+      .small { font-size: 12px; }
+      .badge {
+        display: inline-flex;
+        margin-bottom: 11px;
+        padding: 4px 8px;
+        border-radius: 10px;
+        color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+      }
+      .lifecycle {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .lifecycle .card { position: relative; min-height: 210px; }
+      .big-number {
+        position: absolute;
+        top: 14px;
+        right: 16px;
+        color: var(--cp-accent-soft);
+        font-size: 58px;
+        font-weight: 800;
+        line-height: 1;
+      }
+      .card-icon {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        margin-bottom: 30px;
+        place-items: center;
+        border-radius: 10px;
+        color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+        font-weight: 800;
+      }
+      .diagram {
+        padding: 22px;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+        box-shadow: 0 0 2px var(--cp-border), 0 1px 2px var(--cp-border);
+      }
+      .architecture {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr);
+        gap: 16px;
+      }
+      .principles { display: grid; gap: 10px; }
+      .principle {
+        padding: 14px;
+        border-left: 3px solid var(--cp-accent);
+        border-radius: 10px;
+        background: var(--cp-surface);
+      }
+      .principle strong, .principle span { display: block; }
+      .principle span { margin-top: 3px; color: var(--cp-text-muted); font-size: 11px; }
+      .workflow { position: relative; display: grid; gap: 10px; }
+      .workflow::before {
+        position: absolute;
+        top: 20px;
+        bottom: 20px;
+        left: 24px;
+        width: 2px;
+        background: var(--cp-border);
+        content: "";
+      }
+      .step {
+        position: relative;
+        display: grid;
+        grid-template-columns: 50px minmax(0, 1fr) minmax(190px, .34fr);
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px 14px 0;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+      }
+      .step-number {
+        z-index: 1;
+        display: grid;
+        width: 34px;
+        height: 34px;
+        margin-left: 8px;
+        place-items: center;
+        border: 3px solid var(--cp-surface);
+        border-radius: 50%;
+        color: var(--cp-accent-fg);
+        background: var(--cp-accent);
+        font-size: 11px;
+        font-weight: 800;
+      }
+      .step strong, .step span { display: block; }
+      .step span { margin-top: 3px; color: var(--cp-text-muted); font-size: 11px; }
+      .output {
+        padding: 8px 10px;
+        border-radius: 10px;
+        color: var(--cp-text-muted);
+        background: var(--cp-surface-soft);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+      }
+      .recipe {
+        margin: 0;
+        padding: 20px;
+        overflow-x: auto;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        color: var(--cp-text);
+        background: var(--cp-bg-elevated);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+      .table-scroll {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+      }
+      table { width: 100%; min-width: 900px; border-collapse: collapse; }
+      th, td {
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--cp-border);
+        text-align: left;
+        vertical-align: middle;
+      }
+      th {
+        color: var(--cp-text-muted);
+        background: var(--cp-surface-soft);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+      }
+      td { font-size: 11px; }
+      tr:last-child td { border-bottom: 0; }
+      .recommended td { background: var(--cp-accent-soft); }
+      .good { color: var(--cp-success); font-weight: 750; }
+      .warn { color: var(--cp-warning); font-weight: 750; }
+      .bad { color: var(--cp-danger); font-weight: 750; }
+      .runtime {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(130px, 1fr));
+        gap: 8px;
+        overflow-x: auto;
+      }
+      .runtime-stage {
+        min-width: 130px;
+        padding: 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        background: var(--cp-surface);
+      }
+      .runtime-stage b, .runtime-stage strong, .runtime-stage small { display: block; }
+      .runtime-stage b { color: var(--cp-accent); font-size: 9px; }
+      .runtime-stage strong { margin: 6px 0; font-size: 12px; }
+      .runtime-stage small { color: var(--cp-text-muted); font-size: 10px; }
+      .memory-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, .75fr) minmax(0, 1.25fr);
+        gap: 16px;
+      }
+      .memory-list { display: grid; gap: 8px; }
+      .memory-item {
+        padding: 13px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        background: var(--cp-surface);
+      }
+      .memory-item strong, .memory-item span { display: block; }
+      .memory-item span { margin-top: 3px; color: var(--cp-text-muted); font-size: 11px; }
+      .challenge {
+        padding: 20px;
+        border: 1px solid var(--cp-danger);
+        border-radius: 16px;
+        background: var(--cp-surface);
+      }
+      .challenge h3 { color: var(--cp-danger); }
+      .challenge-flow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 16px;
+      }
+      .state {
+        padding: 8px 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        background: var(--cp-surface-soft);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+        font-weight: 750;
+      }
+      .state.danger { color: var(--cp-danger); border-color: var(--cp-danger); }
+      .state.success { color: var(--cp-success); border-color: var(--cp-success); }
+      .arrow { color: var(--cp-text-muted); font-weight: 800; }
+      .callout {
+        margin-top: 16px;
+        padding: 17px;
+        border: 1px solid var(--cp-accent);
+        border-radius: 16px;
+        background: var(--cp-accent-soft);
+      }
+      .ui-flow {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .screen {
+        overflow: hidden;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+      }
+      .screen-bar {
+        display: flex;
+        gap: 5px;
+        padding: 10px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-surface-soft);
+      }
+      .screen-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cp-border-strong); }
+      .screen-body { padding: 16px; }
+      .screen-body strong, .screen-body span { display: block; }
+      .screen-body span { margin-top: 4px; color: var(--cp-text-muted); font-size: 11px; }
+      .mini-panel {
+        height: 42px;
+        margin-top: 12px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        background: var(--cp-surface-soft);
+      }
+      .data-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+      .entity {
+        padding: 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        background: var(--cp-surface);
+      }
+      .entity strong { display: block; color: var(--cp-accent); font-family: Consolas, "Courier New", Courier, monospace; font-size: 11px; }
+      .entity span { display: block; margin-top: 5px; color: var(--cp-text-muted); font-size: 10px; }
+      .acceptance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .acceptance div {
+        padding: 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 10px;
+        background: var(--cp-surface);
+      }
+      .acceptance strong, .acceptance span { display: block; }
+      .acceptance span { margin-top: 4px; color: var(--cp-text-muted); font-size: 10px; }
+      footer { margin-top: 74px; padding-top: 20px; border-top: 1px solid var(--cp-border); color: var(--cp-text-muted); font-size: 10px; }
+
+      @media (max-width: 1080px) {
+        .shell { grid-template-columns: minmax(0, 1fr); }
+        .sidebar { position: static; width: 100%; height: auto; min-width: 0; border-right: 0; border-bottom: 1px solid var(--cp-border); }
+        .toc { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+        .hero, .architecture, .memory-grid { grid-template-columns: 1fr; }
+        .lifecycle, .grid-4, .data-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 720px) {
+        main { padding: 24px 16px 60px; }
+        .toc { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .hero { min-height: auto; padding: 25px 19px; }
+        .section-head, .grid-2, .grid-3, .grid-4, .lifecycle, .data-grid, .acceptance, .ui-flow { grid-template-columns: 1fr; }
+        .step { grid-template-columns: 50px minmax(0, 1fr); }
+        .output { grid-column: 2; }
+      }
+      @media print {
+        .sidebar { display: none; }
+        .shell { display: block; }
+        main { width: 100%; padding: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">D</div>
+          <div><strong>DealHunter</strong><small>Adaptive monitor compiler</small></div>
+        </div>
+        <p class="toc-title">Design map</p>
+        <nav class="toc">
+          <a href="#decision">Decision</a>
+          <a href="#lifecycle">Four-part lifecycle</a>
+          <a href="#learn">Initial learning</a>
+          <a href="#recipe">Monitor recipe</a>
+          <a href="#runtime">Ongoing checks</a>
+          <a href="#scheduling">Scheduling</a>
+          <a href="#relearn">Relearning</a>
+          <a href="#memory">Retailer memory</a>
+          <a href="#matrix">Decision matrix</a>
+          <a href="#challenge">Challenges</a>
+          <a href="#performance">Performance</a>
+          <a href="#ux">User workflow</a>
+          <a href="#data">Data model</a>
+        </nav>
+        <div class="sidebar-actions">
+          <button class="control" id="theme-toggle" type="button">Theme</button>
+          <button class="control" id="print-button" type="button">Print</button>
+        </div>
+      </aside>
+
+      <main>
+        <section class="hero" id="decision">
+          <div>
+            <p class="eyebrow">Revised architecture</p>
+            <h1>Learn once. Run deterministically. Relearn on demand.</h1>
+            <p class="lede">
+              A product URL enters an LLM-assisted learning pipeline exactly twice in its lifecycle:
+              during initial setup and when the user explicitly requests relearning. Every normal
+              monitoring check executes a tested, versioned recipe with no LLM call.
+            </p>
+            <div class="decision">
+              <strong>Core decision</strong>
+              DOM analysis and screenshot analysis generate a candidate monitor recipe. Automated
+              browser tests must prove that recipe before activation. Ongoing checks run the
+              compiled recipe at high speed.
+            </div>
+          </div>
+          <div role="img" aria-label="Learn once and execute many times architecture">
+            <svg viewBox="0 0 570 430" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <marker id="hero-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                  <path d="M0,0 L8,4 L0,8 Z" fill="var(--cp-accent)" />
+                </marker>
+              </defs>
+              <rect x="24" y="34" width="190" height="122" rx="16" fill="var(--cp-accent-soft)" stroke="var(--cp-accent)" />
+              <text x="119" y="65" text-anchor="middle" fill="var(--cp-accent)" font-size="12" font-weight="800">1 · LEARN</text>
+              <text x="119" y="94" text-anchor="middle" fill="var(--cp-text)" font-size="12">DOM LLM</text>
+              <text x="119" y="116" text-anchor="middle" fill="var(--cp-text)" font-size="12">Screenshot model</text>
+              <text x="119" y="138" text-anchor="middle" fill="var(--cp-text)" font-size="12">Executable tests</text>
+              <path d="M214 95 L275 95" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
+              <rect x="285" y="49" width="252" height="92" rx="16" fill="var(--cp-surface)" stroke="var(--cp-success)" stroke-width="2" />
+              <text x="411" y="78" text-anchor="middle" fill="var(--cp-success)" font-size="12" font-weight="800">VALIDATED MONITOR RECIPE</text>
+              <text x="411" y="104" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">selectors · network fields · states · tests</text>
+              <text x="411" y="123" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">challenge detectors · parser version</text>
+              <path d="M411 141 L411 196" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
+              <rect x="285" y="207" width="252" height="92" rx="16" fill="var(--cp-surface)" stroke="var(--cp-border-strong)" />
+              <text x="411" y="238" text-anchor="middle" fill="var(--cp-text)" font-size="12" font-weight="800">2 · RUN EVERY MINUTE</text>
+              <text x="411" y="264" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">Deterministic execution only</text>
+              <text x="411" y="283" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">No LLM latency or model variance</text>
+              <path d="M285 253 L221 253" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
+              <rect x="24" y="207" width="190" height="92" rx="16" fill="var(--cp-surface)" stroke="var(--cp-warning)" />
+              <text x="119" y="238" text-anchor="middle" fill="var(--cp-warning)" font-size="12" font-weight="800">3 · RELEARN</text>
+              <text x="119" y="264" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">User-triggered or drift proposal</text>
+              <text x="119" y="283" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">Shadow-test before activation</text>
+              <path d="M119 299 L119 349" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
+              <rect x="91" y="360" width="348" height="50" rx="10" fill="var(--cp-surface-soft)" stroke="var(--cp-border)" />
+              <text x="265" y="390" text-anchor="middle" fill="var(--cp-text)" font-size="12" font-weight="800">4 · RETAILER KNOWLEDGE MEMORY</text>
+              <path d="M439 385 L493 385 C534 385 544 348 544 312 L544 95" fill="none" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
+            </svg>
+          </div>
+        </section>
+
+        <section class="section" id="lifecycle">
+          <div class="section-head">
+            <div><span class="section-number">01</span><h2>The four-part lifecycle</h2></div>
+            <p>The model is used only in steps one and three.</p>
+          </div>
+          <div class="lifecycle">
+            <article class="card">
+              <span class="big-number">1</span><div class="card-icon">L</div>
+              <h3>Learn from URL</h3>
+              <p class="muted small">DOM LLM plus screenshot interpretation proposes a complete monitor recipe and test plan.</p>
+            </article>
+            <article class="card">
+              <span class="big-number">2</span><div class="card-icon">R</div>
+              <h3>Run compiled recipe</h3>
+              <p class="muted small">The worker executes deterministic selectors, fields, assertions, and state rules every minute.</p>
+            </article>
+            <article class="card">
+              <span class="big-number">3</span><div class="card-icon">↻</div>
+              <h3>Relearn explicitly</h3>
+              <p class="muted small">The user reruns learning after retailer changes. The new recipe is compared in shadow mode.</p>
+            </article>
+            <article class="card">
+              <span class="big-number">4</span><div class="card-icon">M</div>
+              <h3>Remember retailer knowledge</h3>
+              <p class="muted small">Validated page patterns, endpoints, selectors, challenge signatures, and tests are reusable.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="learn">
+          <div class="section-head">
+            <div><span class="section-number">02</span><h2>Initial learning workflow</h2></div>
+            <p>Learning is an offline compiler stage, not part of normal monitoring.</p>
+          </div>
+          <div class="workflow">
+            <div class="step"><div class="step-number">1</div><div><strong>Register and normalize the URL</strong><span>Resolve redirects, identify the retailer, canonical URL, SKU, variant, seller, and page archetype.</span></div><div class="output">IDENTITY_PROFILE</div></div>
+            <div class="step"><div class="step-number">2</div><div><strong>Capture a bounded learning bundle</strong><span>Sanitized DOM, accessibility tree, screenshot, visible text, network summary, JSON-LD, and control attributes.</span></div><div class="output">LEARNING_BUNDLE</div></div>
+            <div class="step"><div class="step-number">3</div><div><strong>Cheap DOM LLM analysis</strong><span>Locate likely product container, price, SKU, fulfillment state, primary control, and challenge signatures.</span></div><div class="output">DOM_HYPOTHESIS</div></div>
+            <div class="step"><div class="step-number">4</div><div><strong>Screenshot cross-check</strong><span>Confirm visual product region and identify labels, disabled controls, recommendation areas, overlays, and queues.</span></div><div class="output">VISUAL_HYPOTHESIS</div></div>
+            <div class="step"><div class="step-number">5</div><div><strong>Synthesize a monitor recipe</strong><span>Compile candidate selectors, network fields, precedence rules, availability mapping, evidence requirements, and timeouts.</span></div><div class="output">RECIPE_DRAFT</div></div>
+            <div class="step"><div class="step-number">6</div><div><strong>Generate executable tests</strong><span>Test identity binding, disabled controls, recommendations, missing data, changed layout, and contradictory signals.</span></div><div class="output">FIXTURE_SUITE</div></div>
+            <div class="step"><div class="step-number">7</div><div><strong>Run live non-actioning validation</strong><span>Execute the draft repeatedly in shadow mode. It may record results but cannot alert or buy.</span></div><div class="output">SHADOW_RESULTS</div></div>
+            <div class="step"><div class="step-number">8</div><div><strong>Activate only after validation</strong><span>Require stable extraction, exact product identity, bounded unknown rates, and no conflicting primary evidence.</span></div><div class="output">ACTIVE_RECIPE_V1</div></div>
+          </div>
+          <div class="grid-3" style="margin-top: 16px">
+            <article class="card">
+              <span class="badge">Default</span>
+              <h3>Playwright screening</h3>
+              <p class="muted small">Captures DOM, visible text, accessibility representation, screenshot, and a sanitized network summary in the native TypeScript worker.</p>
+            </article>
+            <article class="card">
+              <span class="badge">Optional</span>
+              <h3>SeleniumBase screening</h3>
+              <p class="muted small">Uses standard SeleniumBase browser automation for DOM, text, and screenshot capture through an isolated Python process.</p>
+            </article>
+            <article class="card">
+              <span class="badge">Fallback</span>
+              <h3>Automatic selection</h3>
+              <p class="muted small">Uses Playwright first and attempts SeleniumBase only after a technical engine failure. Challenge detection remains a result, not an engine failure.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="recipe">
+          <div class="section-head">
+            <div><span class="section-number">03</span><h2>The compiled monitor recipe</h2></div>
+            <p>The output is machine-executable configuration, not an LLM prompt.</p>
+          </div>
+          <div class="grid-2">
+            <pre class="recipe">{
+  "retailer": "target",
+  "pageArchetype": "product-detail",
+  "identity": {
+    "skuFromUrl": "A-{tcin}",
+    "titleSelector": "h1",
+    "canonicalUrlRequired": true
+  },
+  "acquisition": {
+    "mode": "browser",
+    "waitFor": ["h1", "primaryPurchaseControl"],
+    "timeoutMs": 30000
+  },
+  "scope": {
+    "productContainer": "nearest container owning h1",
+    "exclude": ["recommendations", "sponsored"]
+  },
+  "availability": {
+    "outOfStockText": ["Out of stock"],
+    "primaryControl": {
+      "role": "button",
+      "name": "Add to cart",
+      "mustBeEnabledForStock": true
+    }
+  },
+  "price": {
+    "selector": "primary product price",
+    "currency": "USD"
+  },
+  "challenge": {
+    "signatures": ["access denied", "captcha iframe"],
+    "action": "QUARANTINE"
+  },
+  "tests": ["identity", "scope", "disabled-cart", "conflicts"]
+}</pre>
+            <div class="principles">
+              <div class="principle"><strong>Identity before availability</strong><span>The recipe must prove it is still looking at the expected SKU and product.</span></div>
+              <div class="principle"><strong>Scope before text</strong><span>Selectors are anchored to the product container and exclude recommendations.</span></div>
+              <div class="principle"><strong>Attributes before labels</strong><span>Enabled and disabled state outrank visible “Add to cart” wording.</span></div>
+              <div class="principle"><strong>Precedence is explicit</strong><span>Retailer fulfillment data outranks SEO metadata and generic text.</span></div>
+              <div class="principle"><strong>Unknown is valid</strong><span>A recipe may fail closed instead of manufacturing an availability answer.</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="runtime">
+          <div class="section-head">
+            <div><span class="section-number">04</span><h2>Ongoing monitoring: no LLM</h2></div>
+            <p>Every minute the worker executes the active recipe as ordinary deterministic code.</p>
+          </div>
+          <div class="runtime">
+            <div class="runtime-stage"><b>01</b><strong>Claim</strong><small>Acquire listing lease and generation.</small></div>
+            <div class="runtime-stage"><b>02</b><strong>Acquire</strong><small>HTTP, API, or pooled browser per recipe.</small></div>
+            <div class="runtime-stage"><b>03</b><strong>Bind</strong><small>Verify URL, SKU, title, variant, and seller.</small></div>
+            <div class="runtime-stage"><b>04</b><strong>Extract</strong><small>Execute stored fields and selectors.</small></div>
+            <div class="runtime-stage"><b>05</b><strong>Validate</strong><small>Apply precedence, scope, and conflict rules.</small></div>
+            <div class="runtime-stage"><b>06</b><strong>Confirm</strong><small>Repeat only positive actionable candidates.</small></div>
+            <div class="runtime-stage"><b>07</b><strong>Commit</strong><small>State transition, alert, and outbox atomically.</small></div>
+          </div>
+          <div class="callout">
+            <strong>Performance consequence:</strong> the expensive LLM and screenshot work happens once
+            during learning. Normal checks use cached recipe logic, pooled browsers, bounded selectors,
+            and deterministic state transitions.
+          </div>
+        </section>
+
+        <section class="section" id="scheduling">
+          <div class="section-head">
+            <div><span class="section-number">05</span><h2>User-controlled adaptive scheduling</h2></div>
+            <p>
+              Scheduling is a first-class listing policy. Variability is used for safe load
+              distribution and measured backoff, not for anti-bot evasion.
+            </p>
+          </div>
+          <div class="grid-3">
+            <article class="card">
+              <span class="badge">Default</span>
+              <h3>System recommended</h3>
+              <p class="muted small">
+                DealHunter learns from recent retailer success, timeout, rate-limit, and challenge
+                history. Healthy retailers remain near the requested cadence; unhealthy paths back
+                off automatically.
+              </p>
+            </article>
+            <article class="card">
+              <span class="badge">Exact</span>
+              <h3>Fixed interval</h3>
+              <p class="muted small">
+                The user chooses one interval, such as every 60 or 180 seconds. No variability is
+                applied unless the retailer explicitly rate-limits the request.
+              </p>
+            </article>
+            <article class="card">
+              <span class="badge">Range</span>
+              <h3>Bounded interval</h3>
+              <p class="muted small">
+                The user chooses minimum and maximum bounds. Each next run is selected inside that
+                range and the chosen duration is recorded with its reason.
+              </p>
+            </article>
+          </div>
+          <div class="table-scroll" style="margin-top: 14px">
+            <table>
+              <thead><tr><th>Observed retailer health</th><th>System behavior</th><th>Example recommendation</th><th>Recorded reason</th></tr></thead>
+              <tbody>
+                <tr><td>Consistently successful</td><td>Maintain requested cadence with small bounded distribution</td><td>Approximately 60 seconds</td><td>Low challenge and failure rates</td></tr>
+                <tr><td>Elevated parse or network failures</td><td>Reduce pressure and preserve worker capacity</td><td>Approximately 120 seconds</td><td>Failure rate crossed policy threshold</td></tr>
+                <tr><td>Repeated rate limits or challenges</td><td>Apply conservative cooldown</td><td>Approximately 240–300 seconds</td><td>Challenge/rate-limit history</td></tr>
+                <tr><td>Explicit user fixed policy</td><td>Use exact interval</td><td>User-selected value</td><td>Fixed by operator</td></tr>
+                <tr><td>Explicit bounded policy</td><td>Select inside configured range</td><td>User minimum–maximum</td><td>Bounded by operator</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section" id="relearn">
+          <div class="section-head">
+            <div><span class="section-number">06</span><h2>User-triggered relearning</h2></div>
+            <p>A changed retailer never silently replaces the active recipe.</p>
+          </div>
+          <div class="architecture">
+            <div class="diagram">
+              <svg viewBox="0 0 820 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Relearning workflow comparing current and candidate recipes">
+                <defs><marker id="relearn-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--cp-accent)" /></marker></defs>
+                <rect x="24" y="40" width="160" height="70" rx="10" fill="var(--cp-surface-soft)" stroke="var(--cp-border)" />
+                <text x="104" y="70" text-anchor="middle" fill="var(--cp-text)" font-size="12" font-weight="700">User clicks Relearn</text>
+                <text x="104" y="91" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">or drift recommends it</text>
+                <path d="M184 75 L247 75" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#relearn-arrow)" />
+                <rect x="257" y="30" width="185" height="90" rx="10" fill="var(--cp-accent-soft)" stroke="var(--cp-accent)" />
+                <text x="349" y="60" text-anchor="middle" fill="var(--cp-accent)" font-size="11" font-weight="800">RUN LEARNING AGAIN</text>
+                <text x="349" y="83" text-anchor="middle" fill="var(--cp-text)" font-size="10">DOM LLM + screenshot</text>
+                <text x="349" y="102" text-anchor="middle" fill="var(--cp-text)" font-size="10">generate recipe v2</text>
+                <path d="M442 75 L505 75" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#relearn-arrow)" />
+                <rect x="515" y="30" width="275" height="90" rx="10" fill="var(--cp-surface)" stroke="var(--cp-warning)" />
+                <text x="652" y="59" text-anchor="middle" fill="var(--cp-warning)" font-size="11" font-weight="800">SHADOW COMPARISON</text>
+                <text x="652" y="82" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">v1 and v2 run against the same pages</text>
+                <text x="652" y="101" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">no alerts or purchases from v2</text>
+                <path d="M652 120 L652 176" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#relearn-arrow)" />
+                <rect x="485" y="187" width="305" height="72" rx="10" fill="var(--cp-surface)" stroke="var(--cp-border)" />
+                <text x="637" y="217" text-anchor="middle" fill="var(--cp-text)" font-size="11" font-weight="700">Tests pass + identity stable + conflicts resolved?</text>
+                <text x="637" y="239" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">show diff, evidence, and expected behavior to user</text>
+                <path d="M637 259 L637 306" stroke="var(--cp-success)" stroke-width="2" marker-end="url(#relearn-arrow)" />
+                <rect x="508" y="317" width="258" height="45" rx="10" fill="var(--cp-surface)" stroke="var(--cp-success)" />
+                <text x="637" y="345" text-anchor="middle" fill="var(--cp-success)" font-size="11" font-weight="800">ACTIVATE V2 · RETAIN V1 ROLLBACK</text>
+              </svg>
+            </div>
+            <div class="principles">
+              <div class="principle"><strong>One-click user control</strong><span>Every listing exposes Relearn monitoring logic.</span></div>
+              <div class="principle"><strong>Versioned recipe diff</strong><span>Show changed selectors, fields, states, and tests before activation.</span></div>
+              <div class="principle"><strong>Shadow validation</strong><span>The candidate recipe cannot create actions during evaluation.</span></div>
+              <div class="principle"><strong>Instant rollback</strong><span>The last-known-good recipe remains available.</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="memory">
+          <div class="section-head">
+            <div><span class="section-number">07</span><h2>Retailer knowledge memory</h2></div>
+            <p>Learning for one product should reduce work for every other product from the same retailer.</p>
+          </div>
+          <div class="memory-grid">
+            <div class="memory-list">
+              <div class="memory-item"><strong>Retailer identity</strong><span>Approved domains, CDN domains, canonical URL rules, SKU patterns.</span></div>
+              <div class="memory-item"><strong>Page archetypes</strong><span>Product detail, preorder, queue, account-only, marketplace, unavailable.</span></div>
+              <div class="memory-item"><strong>Acquisition strategies</strong><span>API endpoints, embedded state, browser waits, product containers.</span></div>
+              <div class="memory-item"><strong>Challenge signatures</strong><span>Detection patterns, cooldown policy, and approved alternate path.</span></div>
+              <div class="memory-item"><strong>Fixture library</strong><span>Known DOM, screenshots, network samples, and expected decisions.</span></div>
+            </div>
+            <div class="diagram">
+              <svg viewBox="0 0 760 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Retailer recipe inheritance">
+                <defs><marker id="memory-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="var(--cp-accent)" /></marker></defs>
+                <rect x="260" y="25" width="240" height="72" rx="16" fill="var(--cp-accent)" />
+                <text x="380" y="56" text-anchor="middle" fill="var(--cp-accent-fg)" font-size="12" font-weight="800">TARGET RETAILER KNOWLEDGE</text>
+                <text x="380" y="78" text-anchor="middle" fill="var(--cp-accent-fg)" font-size="10">versioned common memory</text>
+                <rect x="45" y="155" width="195" height="70" rx="10" fill="var(--cp-surface)" stroke="var(--cp-border)" />
+                <text x="142" y="185" text-anchor="middle" fill="var(--cp-text)" font-size="11" font-weight="700">Product-page base recipe</text>
+                <text x="142" y="205" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">shared selectors and waits</text>
+                <rect x="282" y="155" width="195" height="70" rx="10" fill="var(--cp-surface)" stroke="var(--cp-border)" />
+                <text x="379" y="185" text-anchor="middle" fill="var(--cp-text)" font-size="11" font-weight="700">Challenge policy</text>
+                <text x="379" y="205" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">detect, cooldown, alternate</text>
+                <rect x="520" y="155" width="195" height="70" rx="10" fill="var(--cp-surface)" stroke="var(--cp-border)" />
+                <text x="617" y="185" text-anchor="middle" fill="var(--cp-text)" font-size="11" font-weight="700">Reusable fixture suite</text>
+                <text x="617" y="205" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">identity, stock, errors, drift</text>
+                <path d="M330 97 L160 155" stroke="var(--cp-accent)" marker-end="url(#memory-arrow)" />
+                <path d="M380 97 L380 155" stroke="var(--cp-accent)" marker-end="url(#memory-arrow)" />
+                <path d="M430 97 L600 155" stroke="var(--cp-accent)" marker-end="url(#memory-arrow)" />
+                <rect x="70" y="305" width="170" height="60" rx="10" fill="var(--cp-surface-soft)" stroke="var(--cp-border)" />
+                <text x="155" y="340" text-anchor="middle" fill="var(--cp-text)" font-size="11">Product recipe A</text>
+                <rect x="295" y="305" width="170" height="60" rx="10" fill="var(--cp-surface-soft)" stroke="var(--cp-border)" />
+                <text x="380" y="340" text-anchor="middle" fill="var(--cp-text)" font-size="11">Product recipe B</text>
+                <rect x="520" y="305" width="170" height="60" rx="10" fill="var(--cp-surface-soft)" stroke="var(--cp-border)" />
+                <text x="605" y="340" text-anchor="middle" fill="var(--cp-text)" font-size="11">Product recipe C</text>
+                <path d="M142 225 L155 305" stroke="var(--cp-accent)" marker-end="url(#memory-arrow)" />
+                <path d="M379 225 L380 305" stroke="var(--cp-accent)" marker-end="url(#memory-arrow)" />
+                <path d="M617 225 L605 305" stroke="var(--cp-accent)" marker-end="url(#memory-arrow)" />
+              </svg>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="matrix">
+          <div class="section-head">
+            <div><span class="section-number">08</span><h2>Architecture decision matrix</h2></div>
+            <p>Qualitative expectations, not measured production telemetry.</p>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Approach</th><th>Setup accuracy</th><th>Runtime speed</th><th>Runtime cost</th><th>Change resilience</th><th>Determinism</th><th>Operational fit</th></tr></thead>
+              <tbody>
+                <tr><td>Hand-code every retailer parser</td><td class="warn">Medium</td><td class="good">Excellent</td><td class="good">Low</td><td class="bad">Low</td><td class="good">High</td><td class="warn">Maintenance-heavy</td></tr>
+                <tr><td>LLM DOM parsing on every check</td><td class="warn">High-ish</td><td class="bad">Poor</td><td class="bad">High</td><td class="good">High</td><td class="bad">Low</td><td class="bad">Not suitable</td></tr>
+                <tr><td>DOM LLM + screenshot on every check</td><td class="good">High</td><td class="bad">Worst</td><td class="bad">Highest</td><td class="good">High</td><td class="bad">Low</td><td class="bad">Not suitable</td></tr>
+                <tr><td>Generic heuristic parser only</td><td class="bad">Low</td><td class="good">Excellent</td><td class="good">Low</td><td class="warn">Medium</td><td class="good">High</td><td class="bad">False-positive risk</td></tr>
+                <tr class="recommended"><td><strong>LLM-assisted recipe compiler + deterministic runtime</strong></td><td class="good">High</td><td class="good">Excellent</td><td class="good">Low</td><td class="good">High via relearn</td><td class="good">High</td><td class="good">Recommended</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section" id="challenge">
+          <div class="section-head">
+            <div><span class="section-number">09</span><h2>Bot challenges and CAPTCHAs</h2></div>
+            <p>The recipe learns how to detect challenges and choose approved alternate paths.</p>
+          </div>
+          <div class="challenge">
+            <h3>Safety boundary</h3>
+            <p class="muted small">
+              DealHunter does not automate CAPTCHA solving, fingerprint masking, proxy rotation, or
+              anti-bot bypass. Without human assistance, a challenge must become a controlled blocked
+              state rather than a fabricated monitoring result.
+            </p>
+            <div class="challenge-flow">
+              <span class="state">REQUEST</span><span class="arrow">→</span>
+              <span class="state danger">CHALLENGE_DETECTED</span><span class="arrow">→</span>
+              <span class="state">STOP PATH</span><span class="arrow">→</span>
+              <span class="state">APPROVED API / FEED?</span><span class="arrow">→</span>
+              <span class="state success">USE ALTERNATE</span>
+              <span class="arrow">or</span>
+              <span class="state danger">QUARANTINE</span>
+            </div>
+          </div>
+          <div class="grid-3" style="margin-top: 14px">
+            <div class="card"><span class="badge">Detect</span><h3>Challenge signatures</h3><p class="muted small">Status codes, challenge titles, interstitial DOM, CAPTCHA frames, empty application shells, and redirect patterns.</p></div>
+            <div class="card"><span class="badge">Recover</span><h3>Approved alternatives</h3><p class="muted small">Official APIs, structured feeds, retailer notifications, previously authorized sessions where permitted, and longer cooldowns.</p></div>
+            <div class="card"><span class="badge">Remember</span><h3>Retailer challenge memory</h3><p class="muted small">Store detection patterns, failure rates, allowed alternate methods, and recipe quarantine history.</p></div>
+          </div>
+          <div class="grid-2" style="margin-top: 14px">
+            <pre class="recipe">interface ChallengeHandler {
+  id: string;
+  priority: number;
+  supports(context): boolean;
+  resolve(context): Promise&lt;{
+    action:
+      | "RETRY_AFTER"
+      | "USE_APPROVED_ALTERNATE"
+      | "QUARANTINE";
+    retryAfterSeconds: number;
+    detail: string;
+  }&gt;;
+}</pre>
+            <div class="principles">
+              <div class="principle"><strong>Modular boundary</strong><span>Challenge detection and response are isolated from retailer parsing and scheduling.</span></div>
+              <div class="principle"><strong>Safe default</strong><span>The built-in provider applies cooldown or quarantine and records the reason.</span></div>
+              <div class="principle"><strong>Capability-gated extensions</strong><span>Additional organization-approved handlers can be registered without rewriting monitor recipes.</span></div>
+              <div class="principle"><strong>Audited outcomes</strong><span>Every handler, action, retry duration, and alternate path is recorded.</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="performance">
+          <div class="section-head">
+            <div><span class="section-number">10</span><h2>Robustness and performance</h2></div>
+            <p>The learn-once boundary makes rich setup compatible with one-minute monitoring.</p>
+          </div>
+          <div class="grid-4">
+            <div class="card"><div class="card-icon">Q</div><h3>Per-retailer queues</h3><p class="muted small">A slow retailer cannot block another retailer’s checks.</p></div>
+            <div class="card"><div class="card-icon">B</div><h3>Browser pools</h3><p class="muted small">Reuse Chromium processes while creating fresh isolated contexts.</p></div>
+            <div class="card"><div class="card-icon">H</div><h3>DOM and response hashes</h3><p class="muted small">Skip unchanged enrichment and detect recipe drift cheaply.</p></div>
+            <div class="card"><div class="card-icon">C</div><h3>Candidate-only confirmation</h3><p class="muted small">Double-check only results that could trigger an action.</p></div>
+            <div class="card"><div class="card-icon">L</div><h3>Listing leases</h3><p class="muted small">Prevent overlapping scheduled and manual checks.</p></div>
+            <div class="card"><div class="card-icon">G</div><h3>Generation control</h3><p class="muted small">Late browser results cannot overwrite newer state.</p></div>
+            <div class="card"><div class="card-icon">O</div><h3>Transactional outbox</h3><p class="muted small">Committed transitions cannot lose their notification jobs.</p></div>
+            <div class="card"><div class="card-icon">R</div><h3>Recipe rollback</h3><p class="muted small">Every active recipe retains its last-known-good version.</p></div>
+          </div>
+        </section>
+
+        <section class="section" id="ux">
+          <div class="section-head">
+            <div><span class="section-number">11</span><h2>Complete user experience</h2></div>
+            <p>The complex learning machinery is exposed as three understandable screens.</p>
+          </div>
+          <div class="ui-flow">
+            <div class="screen"><div class="screen-bar"><i class="screen-dot"></i><i class="screen-dot"></i><i class="screen-dot"></i></div><div class="screen-body"><strong>Add product URL</strong><span>Paste URL, choose quantity, start learning.</span><div class="mini-panel"></div><div class="mini-panel"></div></div></div>
+            <div class="screen"><div class="screen-bar"><i class="screen-dot"></i><i class="screen-dot"></i><i class="screen-dot"></i></div><div class="screen-body"><strong>Review learned monitor</strong><span>See product identity, screenshot crop, selected controls, states, and test results.</span><div class="mini-panel"></div><div class="mini-panel"></div></div></div>
+            <div class="screen"><div class="screen-bar"><i class="screen-dot"></i><i class="screen-dot"></i><i class="screen-dot"></i></div><div class="screen-body"><strong>Operate and relearn</strong><span>Monitor recipe health, view evidence, compare versions, and click Relearn.</span><div class="mini-panel"></div><div class="mini-panel"></div></div></div>
+          </div>
+          <div class="callout">
+            <strong>Activation rule:</strong> the system may automatically reuse a retailer base recipe,
+            but a product-specific recipe must pass executable identity and availability tests before
+            it can create alerts.
+          </div>
+        </section>
+
+        <section class="section" id="data">
+          <div class="section-head">
+            <div><span class="section-number">12</span><h2>Data model</h2></div>
+            <p>Learning artifacts, active runtime recipes, and reusable retailer knowledge are versioned separately.</p>
+          </div>
+          <div class="data-grid">
+            <div class="entity"><strong>retailer</strong><span>Domains, policy, capabilities, rate limits, and status.</span></div>
+            <div class="entity"><strong>retailer_knowledge</strong><span>Page archetypes, shared selectors, endpoints, challenges, and fixture references.</span></div>
+            <div class="entity"><strong>learning_run</strong><span>URL, DOM hash, screenshot, network summary, model and prompt versions.</span></div>
+            <div class="entity"><strong>monitor_recipe</strong><span>Versioned deterministic extraction, precedence, waits, and state mapping.</span></div>
+            <div class="entity"><strong>recipe_test</strong><span>Fixture, expected identity, expected state, and execution result.</span></div>
+            <div class="entity"><strong>listing_recipe</strong><span>Active version, shadow version, rollback version, and health.</span></div>
+            <div class="entity"><strong>monitoring_run</strong><span>Recipe version, generation, timings, evidence, decision, and error.</span></div>
+            <div class="entity"><strong>drift_event</strong><span>Selector failure, unknown state, DOM change, and recommended relearn.</span></div>
+            <div class="entity"><strong>schedule_policy</strong><span>System, fixed, or bounded mode; interval bounds; last recommendation and reason.</span></div>
+            <div class="entity"><strong>challenge_handler</strong><span>Registered provider, capabilities, priority, policy status, and audit history.</span></div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div><span class="section-number">13</span><h2>Acceptance criteria</h2></div>
+            <p>The methodology is successful only if both setup quality and runtime discipline hold.</p>
+          </div>
+          <div class="acceptance">
+            <div><strong>No LLM calls during normal checks</strong><span>All one-minute monitoring uses compiled deterministic recipes.</span></div>
+            <div><strong>Every recipe is executable and tested</strong><span>A model response alone is never activated.</span></div>
+            <div><strong>Retailer learning is reusable</strong><span>New products inherit known page archetypes and fixtures.</span></div>
+            <div><strong>Relearning is versioned and reversible</strong><span>Candidate recipes run in shadow mode before activation.</span></div>
+            <div><strong>Challenges never look like stock results</strong><span>Blocked paths become quarantine or approved alternate acquisition.</span></div>
+            <div><strong>Positive actions remain deterministic</strong><span>Identity, state, price, and enabled controls must pass stored assertions.</span></div>
+          </div>
+        </section>
+
+        <footer>
+          Revised DealHunter architecture: LLM-assisted learning in steps one and three;
+          deterministic monitoring in step two; reusable retailer knowledge in step four.
+        </footer>
+      </main>
+    </div>
+    <script>
+      document.getElementById("theme-toggle").addEventListener("click", () => {
+        const current = document.documentElement.getAttribute("data-theme");
+        document.documentElement.setAttribute("data-theme", current === "dark" ? "light" : "dark");
+      });
+      document.getElementById("print-button").addEventListener("click", () => window.print());
+    </script>
+  </body>
+</html>
