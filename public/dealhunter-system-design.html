@@ -556,7 +556,7 @@
               <text x="411" y="123" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">challenge detectors · parser version</text>
               <path d="M411 141 L411 196" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
               <rect x="285" y="207" width="252" height="92" rx="16" fill="var(--cp-surface)" stroke="var(--cp-border-strong)" />
-              <text x="411" y="238" text-anchor="middle" fill="var(--cp-text)" font-size="12" font-weight="800">2 · RUN EVERY MINUTE</text>
+              <text x="411" y="238" text-anchor="middle" fill="var(--cp-text)" font-size="12" font-weight="800">2 · RUN WHEN DUE</text>
               <text x="411" y="264" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">Deterministic execution only</text>
               <text x="411" y="283" text-anchor="middle" fill="var(--cp-text-muted)" font-size="10">No LLM latency or model variance</text>
               <path d="M285 253 L221 253" stroke="var(--cp-accent)" stroke-width="2" marker-end="url(#hero-arrow)" />
@@ -586,7 +586,7 @@
             <article class="card">
               <span class="big-number">2</span><div class="card-icon">R</div>
               <h3>Run compiled recipe</h3>
-              <p class="muted small">The worker executes deterministic selectors, fields, assertions, and state rules every minute.</p>
+              <p class="muted small">The worker executes deterministic selectors, fields, assertions, and state rules whenever each listing becomes due.</p>
             </article>
             <article class="card">
               <span class="big-number">3</span><div class="card-icon">↻</div>
@@ -689,7 +689,7 @@
         <section class="section" id="runtime">
           <div class="section-head">
             <div><span class="section-number">04</span><h2>Ongoing monitoring: no LLM</h2></div>
-            <p>Every minute the worker executes the active recipe as ordinary deterministic code.</p>
+            <p>When a listing becomes due, the worker executes the active recipe as ordinary deterministic code.</p>
           </div>
           <div class="runtime">
             <div class="runtime-stage"><b>01</b><strong>Claim</strong><small>Acquire listing lease and generation.</small></div>
@@ -718,11 +718,11 @@
           <div class="grid-3">
             <article class="card">
               <span class="badge">Default</span>
-              <h3>System recommended</h3>
+              <h3>Adaptive randomized</h3>
               <p class="muted small">
                 DealHunter learns from recent retailer success, timeout, rate-limit, and challenge
-                history. Healthy retailers remain near the requested cadence; unhealthy paths back
-                off automatically.
+                history. Healthy retailers use the configured minimum–maximum window; unhealthy
+                paths expand to progressively longer randomized backoff windows.
               </p>
             </article>
             <article class="card">
@@ -730,7 +730,7 @@
               <h3>Fixed interval</h3>
               <p class="muted small">
                 The user chooses one interval, such as every 60 or 180 seconds. No variability is
-                applied unless the retailer explicitly rate-limits the request.
+                applied, but a slower retailer safety minimum still takes precedence.
               </p>
             </article>
             <article class="card">
@@ -746,10 +746,11 @@
             <table>
               <thead><tr><th>Observed retailer health</th><th>System behavior</th><th>Example recommendation</th><th>Recorded reason</th></tr></thead>
               <tbody>
-                <tr><td>Consistently successful</td><td>Maintain requested cadence with small bounded distribution</td><td>Approximately 60 seconds</td><td>Low challenge and failure rates</td></tr>
-                <tr><td>Elevated parse or network failures</td><td>Reduce pressure and preserve worker capacity</td><td>Approximately 120 seconds</td><td>Failure rate crossed policy threshold</td></tr>
-                <tr><td>Repeated rate limits or challenges</td><td>Apply conservative cooldown</td><td>Approximately 240–300 seconds</td><td>Challenge/rate-limit history</td></tr>
-                <tr><td>Explicit user fixed policy</td><td>Use exact interval</td><td>User-selected value</td><td>Fixed by operator</td></tr>
+                <tr><td>Consistently successful</td><td>Select inside the configured healthy window</td><td>60–120 seconds by default</td><td>Healthy randomized window</td></tr>
+                <tr><td>Elevated parse or network failures</td><td>Reduce pressure and preserve worker capacity</td><td>108–132 seconds or configured bounds</td><td>Retailer failure history backoff</td></tr>
+                <tr><td>Repeated rate limits or challenges</td><td>Apply conservative cooldown</td><td>540–660 seconds; 810–990 after a current challenge</td><td>Challenge/rate-limit history backoff</td></tr>
+                <tr><td>Inherited project policy</td><td>Use the project mode and bounds while enforcing the retailer floor</td><td>Project-selected window</td><td>Project default inheritance</td></tr>
+                <tr><td>Explicit user fixed policy</td><td>Use the requested interval subject to the retailer minimum</td><td>User-selected value or slower safety floor</td><td>Fixed by operator</td></tr>
                 <tr><td>Explicit bounded policy</td><td>Select inside configured range</td><td>User minimum–maximum</td><td>Bounded by operator</td></tr>
               </tbody>
             </table>
@@ -913,7 +914,7 @@
         <section class="section" id="performance">
           <div class="section-head">
             <div><span class="section-number">10</span><h2>Robustness and performance</h2></div>
-            <p>The learn-once boundary makes rich setup compatible with one-minute monitoring.</p>
+            <p>The learn-once boundary makes rich setup compatible with frequent adaptive monitoring.</p>
           </div>
           <div class="grid-4">
             <div class="card"><div class="card-icon">Q</div><h3>Per-retailer queues</h3><p class="muted small">A slow retailer cannot block another retailer’s checks.</p></div>
@@ -958,7 +959,7 @@
             <div class="entity"><strong>listing_recipe</strong><span>Active version, shadow version, rollback version, and health.</span></div>
             <div class="entity"><strong>monitoring_run</strong><span>Recipe version, generation, timings, evidence, decision, and error.</span></div>
             <div class="entity"><strong>drift_event</strong><span>Selector failure, unknown state, DOM change, and recommended relearn.</span></div>
-            <div class="entity"><strong>schedule_policy</strong><span>System, fixed, or bounded mode; interval bounds; last recommendation and reason.</span></div>
+            <div class="entity"><strong>schedule_policy</strong><span>Inherited, adaptive, fixed, or bounded mode; interval bounds; last recommendation and reason.</span></div>
             <div class="entity"><strong>challenge_handler</strong><span>Registered provider, capabilities, priority, policy status, and audit history.</span></div>
           </div>
         </section>
@@ -969,7 +970,7 @@
             <p>The methodology is successful only if both setup quality and runtime discipline hold.</p>
           </div>
           <div class="acceptance">
-            <div><strong>No LLM calls during normal checks</strong><span>All one-minute monitoring uses compiled deterministic recipes.</span></div>
+            <div><strong>No LLM calls during normal checks</strong><span>All scheduled monitoring uses compiled deterministic recipes.</span></div>
             <div><strong>Every recipe is executable and tested</strong><span>A model response alone is never activated.</span></div>
             <div><strong>Retailer learning is reusable</strong><span>New products inherit known page archetypes and fixtures.</span></div>
             <div><strong>Relearning is versioned and reversible</strong><span>Candidate recipes run in shadow mode before activation.</span></div>

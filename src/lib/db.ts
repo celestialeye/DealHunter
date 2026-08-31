@@ -136,7 +136,7 @@ function migrate(database: DatabaseSync) {
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       max_price_cents INTEGER,
-      required_availability TEXT NOT NULL DEFAULT 'IN_STOCK',
+      required_availability TEXT NOT NULL DEFAULT 'ACTIONABLE',
       action_alert INTEGER NOT NULL DEFAULT 1,
       action_purchase INTEGER NOT NULL DEFAULT 0,
       allow_random_variant INTEGER NOT NULL DEFAULT 0,
@@ -330,7 +330,7 @@ function migrate(database: DatabaseSync) {
     database,
     "listings",
     "schedule_mode",
-    "TEXT NOT NULL DEFAULT 'SYSTEM'",
+    "TEXT NOT NULL DEFAULT 'INHERIT'",
   );
   ensureColumn(
     database,
@@ -473,6 +473,10 @@ function migrate(database: DatabaseSync) {
           ELSE NULL
         END
     WHERE availability_hint_text IS NULL;
+
+    UPDATE rules
+    SET required_availability = 'ACTIONABLE'
+    WHERE required_availability != 'ACTIONABLE';
   `);
   database.exec(`
     CREATE INDEX IF NOT EXISTS monitoring_runs_listing_finished

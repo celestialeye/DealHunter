@@ -15,8 +15,15 @@ Pokémon Center, Best Buy, and Target.
 - Live HTTP and Playwright-based retailer monitoring.
 - Exact retailer status text alongside normalized internal states.
 - Price and availability history with filters and pagination.
-- Fixed, bounded, or system-recommended monitoring schedules.
+- Product planning with one row per retailer, latest availability and check
+  status, timestamps, and direct retailer product links.
+- Retailer and availability filters for project listings, plus listing removal
+  from product detail pages.
+- Adaptive randomized monitoring by default, with bounded and explicit fixed
+  overrides and project-level inheritance.
 - Project defaults, retailer guardrails, and listing overrides.
+- Actionable alert policies for in-stock, preorder, backorder, and limited
+  ordering opportunities.
 - Discord webhook notifications stored encrypted at rest.
 - Dual-model monitor learning from DOM and screenshot evidence.
 - Versioned deterministic recipes, generated tests, retailer memory, and
@@ -89,6 +96,24 @@ recipe and records the exact recipe ID and version used.
 
 Learning model and screening-engine choices are available under **Settings**.
 
+## Monitoring and alert behavior
+
+- Healthy adaptive schedules select the next check inside the configured
+  minimum and maximum window.
+- Recent failures, rate limits, and challenge responses expand that window;
+  retailer minimum intervals always remain enforced.
+- New and inherited listings receive their first calculated schedule
+  immediately instead of defaulting to a fixed one-minute delay.
+- The local worker varies its polling interval and spaces checks within a
+  project scan to avoid synchronized request bursts.
+- Alert policies treat `IN_STOCK`, `PREORDER`, `BACKORDER`, and `LIMITED` as
+  actionable ordering states.
+- Every actionable candidate requires a fresh authoritative confirmation before
+  it can update confirmed state or trigger an alert.
+- The Products view keeps retailer, latest availability result, check execution
+  status, and last-check time in separate columns. Each retailer name opens the
+  monitored product URL directly.
+
 ## Local data
 
 Runtime data is stored under:
@@ -107,7 +132,7 @@ Set `DEALHUNTER_DATA_DIR` to use another location.
 - Webhook URLs are encrypted before database storage.
 - Failed and unknown observations do not overwrite confirmed availability.
 - Weak SEO metadata cannot independently establish in-stock status.
-- Authoritative in-stock candidates require a fresh second observation.
+- Authoritative actionable candidates require a fresh second observation.
 - Rules alert only on confirmed false-to-true transitions.
 - Transition keys prevent duplicate alerts.
 - Challenge pages produce a challenged or quarantined state rather than a

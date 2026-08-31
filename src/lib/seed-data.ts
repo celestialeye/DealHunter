@@ -129,6 +129,7 @@ export function seedPokemonProject(database: DatabaseSync) {
     if (!productId) {
       throw new Error(`Missing seed product ${listing.product}.`);
     }
+    const initialIntervalSeconds = 60 + Math.floor(Math.random() * 61);
     insertListing.run(
       `pokemon-listing-${index + 1}`,
       productId,
@@ -140,7 +141,7 @@ export function seedPokemonProject(database: DatabaseSync) {
       listing.availability,
       availabilityText(listing.availability),
       listing.mode ?? "EXACT",
-      now,
+      new Date(Date.parse(now) + initialIntervalSeconds * 1000).toISOString(),
       now,
     );
   });
@@ -150,12 +151,12 @@ export function seedPokemonProject(database: DatabaseSync) {
       `INSERT INTO rules
        (id, project_id, name, max_price_cents, required_availability,
         action_alert, action_purchase, cooldown_minutes, created_at)
-       VALUES (?, ?, ?, NULL, 'IN_STOCK', 1, 0, 0, ?)`,
+       VALUES (?, ?, ?, NULL, 'ACTIONABLE', 1, 0, 0, ?)`,
     )
     .run(
       "pokemon-msrp-alert",
       projectId,
-      "Alert as soon as a product becomes available",
+      "Alert as soon as buying or preorder opens",
       now,
     );
 }
@@ -184,10 +185,11 @@ export function repairSeedSimulationArtifacts(database: DatabaseSync) {
   database
     .prepare(
       `UPDATE rules
-       SET name = ?, max_price_cents = NULL
+       SET name = ?, max_price_cents = NULL,
+           required_availability = 'ACTIONABLE'
        WHERE id = 'pokemon-msrp-alert'`,
     )
-    .run("Alert as soon as a product becomes available");
+    .run("Alert as soon as buying or preorder opens");
   database
     .prepare(
       `UPDATE rules

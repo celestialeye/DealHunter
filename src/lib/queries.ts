@@ -56,7 +56,7 @@ export function getDashboardData() {
           SELECT mr.status
           FROM monitoring_runs mr
           WHERE mr.listing_id = l.id
-          ORDER BY mr.started_at DESC
+          ORDER BY mr.started_at DESC, mr.id DESC
           LIMIT 1
         ) AS last_result_status
        FROM listings l
@@ -139,9 +139,30 @@ export function getProject(id: string) {
           SELECT mr.detail
           FROM monitoring_runs mr
           WHERE mr.listing_id = l.id
-          ORDER BY mr.started_at DESC
+          ORDER BY mr.started_at DESC, mr.id DESC
           LIMIT 1
-        ) AS last_result_detail
+        ) AS last_result_detail,
+        (
+          SELECT mr.availability
+          FROM monitoring_runs mr
+          WHERE mr.listing_id = l.id
+          ORDER BY mr.started_at DESC, mr.id DESC
+          LIMIT 1
+        ) AS last_result_availability,
+        (
+          SELECT mr.availability_text
+          FROM monitoring_runs mr
+          WHERE mr.listing_id = l.id
+          ORDER BY mr.started_at DESC, mr.id DESC
+          LIMIT 1
+        ) AS last_result_availability_text,
+        (
+          SELECT mr.started_at
+          FROM monitoring_runs mr
+          WHERE mr.listing_id = l.id
+          ORDER BY mr.started_at DESC, mr.id DESC
+          LIMIT 1
+        ) AS last_result_started_at
        FROM listings l
        JOIN products pr ON pr.id = l.product_id
        WHERE pr.project_id = ?

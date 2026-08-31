@@ -48,10 +48,37 @@ test("shows correct seeded availability, price, link, and availability-only rule
   await expect(boosterRow).toContainText("$26.94");
   await expect(boosterRow).toContainText("Known price · not live");
 
+  await page.getByRole("link", { name: "Show Best Buy listings" }).click();
+  await expect(page).toHaveURL(/listingRetailer=Best\+Buy/);
+  const bestBuyRows = page.getByTestId("listing-row");
+  await expect(bestBuyRows).not.toHaveCount(0);
+  expect(
+    (await bestBuyRows.allTextContents()).every((row) =>
+      row.includes("Best Buy"),
+    ),
+  ).toBe(true);
+
+  await page
+    .getByRole("link", { name: "Show Coming Soon listings" })
+    .click();
+  await expect(page).toHaveURL(/listingStatus=COMING_SOON/);
+  expect(
+    (await page.getByTestId("listing-row").allTextContents()).every((row) =>
+      row.includes("Coming Soon"),
+    ),
+  ).toBe(true);
+
   await page.getByTestId("project-tab-rules").click();
   await expect(
-    page.getByText("Alert as soon as a product becomes available"),
+    page.getByText("Alert as soon as buying or preorder opens"),
   ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "How monitoring becomes an alert" }),
+  ).toBeVisible();
+  await expect(page.getByText(/Check retailer/i)).toBeVisible();
+  await expect(page.getByText(/Evaluate policy/i)).toBeVisible();
+  await expect(page.getByText(/Send alert/i)).toBeVisible();
+  await expect(page.getByText("Earliest ordering opportunity")).toBeVisible();
   await expect(page.getByText(/no price ceiling/i).first()).toBeVisible();
 });
 
@@ -143,6 +170,20 @@ test("creates and monitors a deal hunt end to end", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Next" })).toBeVisible();
 
   await page.goto(`${projectUrl}?view=products`);
+  const productRow = page
+    .getByRole("row")
+    .filter({ hasText: productName });
+  await expect(productRow).toContainText("Local Test Retailer");
+  await expect(productRow).toContainText("Success");
+  await expect(productRow).toContainText("In Stock");
+  await expect(
+    productRow.getByRole("link", {
+      name: `Open Local Test Retailer product page for ${productName}`,
+    }),
+  ).toHaveAttribute(
+    "href",
+    fixtureUrl.toString(),
+  );
   await page
     .getByRole("link", { name: `View details for ${productName}` })
     .click();
@@ -222,6 +263,7 @@ test("adds a crawled product by URL and manages retailer records", async ({
   await expect(page.getByText("$24.99").first()).toBeVisible();
   await expect(page.getByText(/v1 · GENERIC JSONLD/)).toBeVisible();
   await expect(page.getByTestId("learning-run-row")).toHaveCount(1);
+  const productUrl = page.url();
   await page.getByTestId("relearn-listing").click();
   await expect(page.getByText(/v2 · GENERIC JSONLD/)).toBeVisible();
   await expect(page.getByTestId("learning-run-row")).toHaveCount(2);
@@ -287,4 +329,12 @@ test("adds a crawled product by URL and manages retailer records", async ({
   );
   await expect(page.getByTestId("learning-effort")).toHaveValue("medium");
   await expect(page.getByTestId("screening-engine")).toHaveValue("AUTO");
+
+  await page.goto(productUrl);
+  await page.getByTestId("remove-listing").click();
+  await expect(page.getByTestId("remove-listing")).toHaveCount(0);
+  await expect(
+    page.getByText("No retailer listings are being monitored for this product."),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: productName })).toBeVisible();
 });

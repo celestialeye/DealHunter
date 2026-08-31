@@ -33,6 +33,24 @@ function defaultAvailabilityText(value: Availability) {
   return labels[value];
 }
 
+export function isActionableAvailability(value: Availability) {
+  return (
+    value === "IN_STOCK" ||
+    value === "PREORDER" ||
+    value === "BACKORDER" ||
+    value === "LIMITED"
+  );
+}
+
+export function matchesRuleAvailability(
+  availability: Availability,
+  requiredAvailability: string,
+) {
+  return requiredAvailability === "ACTIONABLE"
+    ? isActionableAvailability(availability)
+    : availability === requiredAvailability;
+}
+
 function findProductOffer(value: unknown): Record<string, unknown> | null {
   if (Array.isArray(value)) {
     for (const item of value) {
@@ -221,7 +239,7 @@ export function calculateNextSchedule(
     const minimum = Math.max(retailerFloor, minimumSeconds);
     const maximum = Math.max(minimum, maximumSeconds);
     return {
-      intervalSeconds: Math.round(minimum + random() * (maximum - minimum)),
+      intervalSeconds: randomIntervalSeconds(minimum, maximum, random),
       reason: `${inheritedPrefix}Bounded interval: ${minimum}-${maximum} seconds after retailer minimum.`,
     };
   }
@@ -241,19 +259,49 @@ export function calculateNextSchedule(
     ? challengeCount / statuses.length
     : 0;
   const failureRate = statuses.length ? failureCount / statuses.length : 0;
-  const base =
-    currentStatus === "CHALLENGE" || currentStatus === "RATE_LIMITED"
-      ? 900
-      : challengeRate >= 0.2
-        ? 600
-        : failureRate >= 0.3
-          ? 120
-          : 60;
-  const jittered = Math.round(base * (0.9 + random() * 0.2));
+  const healthyRange = Math.max(0, maximumSeconds - minimumSeconds);
+  const healthyMinimum = Math.max(retailerFloor, minimumSeconds);
+  const healthyMaximum = Math.max(
+    healthyMinimum,
+    maximumSeconds,
+    healthyMinimum + healthyRange,
+  );
+  let scheduleMinimum = healthyMinimum;
+  let scheduleMaximum = healthyMaximum;
+  let scheduleBasis = "healthy randomized window";
+
+  if (currentStatus === "CHALLENGE" || currentStatus === "RATE_LIMITED") {
+    scheduleMinimum = Math.max(healthyMinimum, 810);
+    scheduleMaximum = Math.max(healthyMaximum, 990);
+    scheduleBasis = "current challenge/rate-limit backoff";
+  } else if (challengeRate >= 0.2) {
+    scheduleMinimum = Math.max(healthyMinimum, 540);
+    scheduleMaximum = Math.max(healthyMaximum, 660);
+    scheduleBasis = "retailer challenge/rate-limit history backoff";
+  } else if (failureRate >= 0.3) {
+    scheduleMinimum = Math.max(healthyMinimum, 108);
+    scheduleMaximum = Math.max(healthyMaximum, 132);
+    scheduleBasis = "retailer failure history backoff";
+  }
+
   return {
-    intervalSeconds: Math.max(retailerFloor, jittered),
-    reason: `${inheritedPrefix}System recommendation from ${statuses.length} retailer checks: ${(challengeRate * 100).toFixed(0)}% challenge/rate-limit and ${(failureRate * 100).toFixed(0)}% total failure rate; retailer minimum ${retailerFloor} seconds.`,
+    intervalSeconds: randomIntervalSeconds(
+      scheduleMinimum,
+      scheduleMaximum,
+      random,
+    ),
+    reason: `${inheritedPrefix}System recommendation from ${statuses.length} retailer checks (${scheduleBasis}, ${scheduleMinimum}-${scheduleMaximum} seconds): ${(challengeRate * 100).toFixed(0)}% challenge/rate-limit and ${(failureRate * 100).toFixed(0)}% total failure rate; retailer minimum ${retailerFloor} seconds.`,
   };
+}
+
+export function randomIntervalSeconds(
+  minimumSeconds: number,
+  maximumSeconds: number,
+  random = Math.random,
+) {
+  const minimum = Math.ceil(minimumSeconds);
+  const maximum = Math.max(minimum, Math.floor(maximumSeconds));
+  return Math.floor(minimum + random() * (maximum - minimum + 1));
 }
 
 export function simulatedObservation(
@@ -557,13 +605,13 @@ function isAuthoritativePositive(observation: ListingObservation) {
   );
 }
 
-async function confirmPositiveObservation(
+async function confirmActionableObservation(
   listing: ListingRecord,
   observation: ListingObservation,
 ) {
   if (
     observation.resultStatus !== "SUCCESS" ||
-    observation.availability !== "IN_STOCK"
+    !isActionableAvailability(observation.availability)
   ) {
     return observation;
   }
@@ -574,23 +622,24 @@ async function confirmPositiveObservation(
       confidence: 0,
       resultStatus: "PARSE_ERROR" as const,
       detail:
-        "In-stock candidate rejected because its evidence was not authoritative.",
+        "Actionable availability candidate rejected because its evidence was not authoritative.",
     };
   }
 
   if (observation.evidenceType !== "TEST_FIXTURE") {
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const confirmationDelayMs = 1_250 + Math.floor(Math.random() * 1_001);
+    await new Promise((resolve) => setTimeout(resolve, confirmationDelayMs));
   }
   const confirmation = await acquireObservation(listing);
   if (
     confirmation.resultStatus === "SUCCESS" &&
-    confirmation.availability === "IN_STOCK" &&
+    isActionableAvailability(confirmation.availability) &&
     isAuthoritativePositive(confirmation)
   ) {
     return {
       ...confirmation,
       confidence: Math.min(observation.confidence, confirmation.confidence),
-      detail: `${confirmation.detail ?? "Authoritative availability evidence."} Positive availability confirmed by a fresh second observation.`,
+      detail: `${confirmation.detail ?? "Authoritative availability evidence."} Actionable availability confirmed by a fresh second observation.`,
     };
   }
   if (
@@ -599,14 +648,14 @@ async function confirmPositiveObservation(
   ) {
     return {
       ...confirmation,
-      detail: `${confirmation.detail ?? ""} Initial in-stock candidate was rejected by confirmation.`,
+      detail: `${confirmation.detail ?? ""} Initial actionable availability candidate was rejected by confirmation.`,
     };
   }
   return {
     ...confirmation,
     availability: "UNKNOWN" as const,
     confidence: 0,
-    detail: `Initial in-stock candidate was not accepted because confirmation failed: ${confirmation.detail ?? confirmation.resultStatus}.`,
+    detail: `Initial actionable availability candidate was not accepted because confirmation failed: ${confirmation.detail ?? confirmation.resultStatus}.`,
   };
 }
 
@@ -633,8 +682,10 @@ async function evaluateRules(
     const requiredAvailability = String(rule.required_availability);
     const maxPrice =
       rule.max_price_cents === null ? null : Number(rule.max_price_cents);
-    const matchesAvailability =
-      observation.availability === requiredAvailability;
+    const matchesAvailability = matchesRuleAvailability(
+      observation.availability,
+      requiredAvailability,
+    );
     const matchesPrice =
       maxPrice === null ||
       (observation.priceCents !== null &&
@@ -702,8 +753,11 @@ async function evaluateRules(
       observation.priceCents === null
         ? "an unknown price"
         : `$${(observation.priceCents / 100).toFixed(2)}`;
-    const title = `${listing.product_name} is available`;
-    const message = `${listing.retailer} reports ${listing.title} at ${price}. Rule: ${String(rule.name)}.`;
+    const availabilityText =
+      observation.displayAvailabilityText ??
+      defaultAvailabilityText(observation.availability);
+    const title = `${listing.product_name} can be ordered now`;
+    const message = `${listing.retailer} reports ${listing.title} at ${price}. Availability: ${availabilityText}. Rule: ${String(rule.name)}.`;
     const createdAt = nowIso();
     const transitionSequence = (state?.transition_sequence ?? 0) + 1;
     const transitionKey = `${ruleId}:${listing.id}:${transitionSequence}`;
@@ -868,8 +922,10 @@ export async function observeListing(listingId: string) {
 
   const initialObservation = await acquireObservation(listing);
   const confirmationGroupId =
-    initialObservation.availability === "IN_STOCK" ? createId() : null;
-  const observation = await confirmPositiveObservation(
+    isActionableAvailability(initialObservation.availability)
+      ? createId()
+      : null;
+  const observation = await confirmActionableObservation(
     listing,
     initialObservation,
   );
@@ -1025,10 +1081,18 @@ export async function runProjectScan(projectId: string) {
        ORDER BY l.retailer, l.title`,
     )
     .all(projectId) as Array<{ id: string }>;
-  for (const listing of listings) {
+  for (const [index, listing] of listings.entries()) {
     await observeListing(listing.id);
+    if (index < listings.length - 1) {
+      await waitForScanPacing();
+    }
   }
   return listings.length;
+}
+
+async function waitForScanPacing() {
+  const pacingDelayMs = 250 + Math.floor(Math.random() * 501);
+  await new Promise((resolve) => setTimeout(resolve, pacingDelayMs));
 }
 
 export async function runDueScans() {
@@ -1040,8 +1104,11 @@ export async function runDueScans() {
        LIMIT 100`,
     )
     .all(nowIso()) as Array<{ id: string }>;
-  for (const listing of listings) {
+  for (const [index, listing] of listings.entries()) {
     await observeListing(listing.id);
+    if (index < listings.length - 1) {
+      await waitForScanPacing();
+    }
   }
   return listings.length;
 }

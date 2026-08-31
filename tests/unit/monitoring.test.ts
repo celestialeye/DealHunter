@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   calculateNextSchedule,
   detectPokemonCenterChallenge,
+  isActionableAvailability,
+  matchesRuleAvailability,
   parseBestBuyButtonState,
   parseTargetProductSection,
   simulatedObservation,
@@ -90,6 +92,49 @@ describe("simulatedObservation", () => {
       expect(schedule.intervalSeconds).toBe(180);
     });
 
+    it("randomizes healthy system scheduling inside the configured range", () => {
+      const schedule = calculateNextSchedule(
+        {
+          schedule_mode: "SYSTEM",
+          interval_seconds: 60,
+          interval_min_seconds: 120,
+          interval_max_seconds: 240,
+          project_default_schedule_mode: "SYSTEM",
+          project_default_interval_seconds: 60,
+          project_default_interval_min_seconds: 60,
+          project_default_interval_max_seconds: 120,
+          retailer_minimum_interval_seconds: 60,
+        },
+        [],
+        "SUCCESS",
+        () => 0.5,
+      );
+
+      expect(schedule.intervalSeconds).toBe(180);
+      expect(schedule.reason).toContain("healthy randomized window");
+    });
+
+    it("preserves a randomized system window above the retailer floor", () => {
+      const schedule = calculateNextSchedule(
+        {
+          schedule_mode: "SYSTEM",
+          interval_seconds: 60,
+          interval_min_seconds: 60,
+          interval_max_seconds: 120,
+          project_default_schedule_mode: "SYSTEM",
+          project_default_interval_seconds: 60,
+          project_default_interval_min_seconds: 60,
+          project_default_interval_max_seconds: 120,
+          retailer_minimum_interval_seconds: 180,
+        },
+        [],
+        "SUCCESS",
+        () => 0.5,
+      );
+
+      expect(schedule.intervalSeconds).toBe(210);
+    });
+
     it("backs off system scheduling after challenge history", () => {
       const schedule = calculateNextSchedule(
         {
@@ -159,6 +204,29 @@ describe("simulatedObservation", () => {
 
     expect(observation.availability).toBe("IN_STOCK");
     expect(observation.priceCents).toBe(1499);
+  });
+});
+
+describe("actionable availability", () => {
+  it.each(["IN_STOCK", "PREORDER", "BACKORDER", "LIMITED"] as const)(
+    "treats %s as an ordering opportunity",
+    (availability) => {
+      expect(isActionableAvailability(availability)).toBe(true);
+      expect(matchesRuleAvailability(availability, "ACTIONABLE")).toBe(true);
+    },
+  );
+
+  it.each(["OUT_OF_STOCK", "COMING_SOON", "UNAVAILABLE", "UNKNOWN"] as const)(
+    "does not treat %s as actionable",
+    (availability) => {
+      expect(isActionableAvailability(availability)).toBe(false);
+      expect(matchesRuleAvailability(availability, "ACTIONABLE")).toBe(false);
+    },
+  );
+
+  it("keeps compatibility with legacy exact-state rules", () => {
+    expect(matchesRuleAvailability("PREORDER", "PREORDER")).toBe(true);
+    expect(matchesRuleAvailability("IN_STOCK", "PREORDER")).toBe(false);
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  Bell,
   Boxes,
   ChevronLeft,
   ChevronRight,
@@ -25,7 +26,7 @@ import {
   updateRuleAction,
 } from "@/app/actions";
 import { StatusBadge } from "@/components/status-badge";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatAvailability, formatDate, formatMoney } from "@/lib/format";
 import {
   getProject,
   getProjectMonitoringRuns,
@@ -52,18 +53,18 @@ const views: Array<{
   { id: "overview", label: "Overview", description: "Project health" },
   { id: "products", label: "Products", description: "Acquisition goals" },
   { id: "listings", label: "Listings", description: "Retailer offers" },
-  { id: "rules", label: "Rules", description: "Trigger conditions" },
-  { id: "schedule", label: "Schedule", description: "Check frequency" },
+  { id: "rules", label: "Alerts", description: "When to notify" },
+  { id: "schedule", label: "Monitoring", description: "How often to check" },
   { id: "runs", label: "Check logs", description: "Monitoring details" },
   { id: "setup", label: "Add & manage", description: "New targets" },
 ];
 
 function displayedAvailability(listing: Row) {
   if (listing.current_availability !== "UNKNOWN") {
-    return listing.current_availability;
+    return String(listing.current_availability);
   }
   if (listing.availability_hint) {
-    return listing.availability_hint;
+    return String(listing.availability_hint);
   }
   if (listing.last_result_status === "CHALLENGE") {
     return "CHALLENGE";
@@ -265,7 +266,21 @@ function OverviewView({
   );
 }
 
-function ProductsView({ products }: { products: Row[] }) {
+function ProductsView({
+  products,
+  listings,
+}: {
+  products: Row[];
+  listings: Row[];
+}) {
+  const listingsByProduct = new Map<string, Row[]>();
+  for (const listing of listings) {
+    const productId = String(listing.product_id);
+    const productListings = listingsByProduct.get(productId) ?? [];
+    productListings.push(listing);
+    listingsByProduct.set(productId, productListings);
+  }
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -283,57 +298,130 @@ function ProductsView({ products }: { products: Row[] }) {
               <th>Expected</th>
               <th>Best visible</th>
               <th>Coverage</th>
+              <th>Retailer</th>
+              <th>Latest result</th>
+              <th>Check status</th>
+              <th>Last checked</th>
             </tr>
           </thead>
           <tbody>
-            {products.map((product) => (
-              <tr key={String(product.id)}>
-                <td className="primary-cell">
-                  <Link
-                    className="product-link"
-                    href={`/products/${String(product.id)}`}
-                    aria-label={`View details for ${String(product.canonical_name)}`}
-                  >
-                    <span className="product-list-identity">
-                      <span
-                        className="product-list-thumb"
-                        style={
-                          product.image_local_path || product.image_url
-                            ? {
-                                backgroundImage: `url("${String(product.image_local_path ?? product.image_url)}")`,
+            {products.flatMap((product) => {
+              const productListings =
+                listingsByProduct.get(String(product.id)) ?? [];
+              const retailerRows: Array<Row | null> = productListings.length
+                ? productListings
+                : [null];
+
+              return retailerRows.map((listing, index) => (
+                <tr
+                  key={
+                    listing
+                      ? String(listing.id)
+                      : `${String(product.id)}-no-listings`
+                  }
+                  data-testid="product-retailer-row"
+                >
+                  {index === 0 ? (
+                    <>
+                      <td className="primary-cell" rowSpan={retailerRows.length}>
+                        <Link
+                          className="product-link"
+                          href={`/products/${String(product.id)}`}
+                          aria-label={`View details for ${String(product.canonical_name)}`}
+                        >
+                          <span className="product-list-identity">
+                            <span
+                              className="product-list-thumb"
+                              style={
+                                product.image_local_path || product.image_url
+                                  ? {
+                                      backgroundImage: `url("${String(product.image_local_path ?? product.image_url)}")`,
+                                    }
+                                  : undefined
                               }
-                            : undefined
-                        }
-                        aria-hidden="true"
+                              aria-hidden="true"
+                            >
+                              {product.image_local_path || product.image_url
+                                ? ""
+                                : String(product.canonical_name).slice(0, 1)}
+                            </span>
+                            <span>
+                              <strong>
+                                {String(product.canonical_name)}
+                                <ExternalLink size={14} />
+                              </strong>
+                              <small>
+                                {String(product.variant || product.notes)}
+                              </small>
+                            </span>
+                          </span>
+                        </Link>
+                      </td>
+                      <td rowSpan={retailerRows.length}>
+                        {Number(product.owned_quantity)} /{" "}
+                        {Number(product.target_quantity)}
+                      </td>
+                      <td rowSpan={retailerRows.length}>
+                        {formatMoney(product.expected_price_cents)}
+                      </td>
+                      <td rowSpan={retailerRows.length}>
+                        {formatMoney(product.best_price_cents)}
+                      </td>
+                      <td rowSpan={retailerRows.length}>
+                        {Number(product.listing_count)} listings ·{" "}
+                        {Number(product.in_stock_count)} live
+                      </td>
+                    </>
+                  ) : null}
+                  <td className="product-retailer-cell">
+                    {listing ? (
+                      <a
+                        className="product-retailer-link"
+                        href={String(listing.url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open ${String(listing.retailer)} product page for ${String(product.canonical_name)}`}
                       >
-                        {product.image_local_path || product.image_url
-                          ? ""
-                          : String(product.canonical_name).slice(0, 1)}
-                      </span>
-                      <span>
                         <strong>
-                          {String(product.canonical_name)}
-                          <ExternalLink size={14} />
+                          {String(listing.retailer)}
+                          <ExternalLink size={12} />
                         </strong>
-                        <small>
-                          {String(product.variant || product.notes)}
-                        </small>
+                        <small>{String(listing.title)}</small>
+                      </a>
+                    ) : (
+                      <span className="product-retailer-empty">
+                        No retailer listings
                       </span>
-                    </span>
-                  </Link>
-                </td>
-                <td>
-                  {Number(product.owned_quantity)} /{" "}
-                  {Number(product.target_quantity)}
-                </td>
-                <td>{formatMoney(product.expected_price_cents)}</td>
-                <td>{formatMoney(product.best_price_cents)}</td>
-                <td>
-                  {Number(product.listing_count)} listings ·{" "}
-                  {Number(product.in_stock_count)} live
-                </td>
-              </tr>
-            ))}
+                    )}
+                  </td>
+                  <td className="product-check-cell">
+                    <StatusBadge
+                      value={
+                        listing?.last_result_availability ?? "NOT_CHECKED"
+                      }
+                      label={
+                        listing?.last_result_availability
+                          ? listing.last_result_availability_text
+                            ? String(listing.last_result_availability_text)
+                            : undefined
+                          : "Not checked"
+                      }
+                    />
+                  </td>
+                  <td className="product-check-cell">
+                    <StatusBadge
+                      value={listing?.last_result_status ?? "NOT_CHECKED"}
+                      label={
+                        listing?.last_result_status ? undefined : "Not checked"
+                      }
+                    />
+                  </td>
+                  <td className="product-last-checked">
+                    {formatDate(listing?.last_result_started_at)}
+                  </td>
+                </tr>
+              ));
+            })}
           </tbody>
         </table>
       </div>
@@ -341,13 +429,171 @@ function ProductsView({ products }: { products: Row[] }) {
   );
 }
 
-function ListingsView({ listings }: { listings: Row[] }) {
+function listingsUrl(
+  projectId: string,
+  retailer?: string,
+  status?: string,
+) {
+  const params = new URLSearchParams({ view: "listings" });
+  if (retailer) params.set("listingRetailer", retailer);
+  if (status) params.set("listingStatus", status);
+  return `/projects/${projectId}?${params.toString()}`;
+}
+
+function ListingsView({
+  projectId,
+  listings,
+  retailerFilter,
+  statusFilter,
+}: {
+  projectId: string;
+  listings: Row[];
+  retailerFilter?: string;
+  statusFilter?: string;
+}) {
+  const retailers = [
+    ...new Set(listings.map((listing) => String(listing.retailer))),
+  ].sort((left, right) => left.localeCompare(right));
+  const statuses = [
+    ...new Set(listings.map((listing) => displayedAvailability(listing))),
+  ].sort((left, right) =>
+    formatAvailability(left).localeCompare(formatAvailability(right)),
+  );
+  const listingsForRetailerCounts = statusFilter
+    ? listings.filter(
+        (listing) => displayedAvailability(listing) === statusFilter,
+      )
+    : listings;
+  const listingsForStatusCounts = retailerFilter
+    ? listings.filter(
+        (listing) => String(listing.retailer) === retailerFilter,
+      )
+    : listings;
+  const retailerCounts = new Map<string, number>();
+  const statusCounts = new Map<string, number>();
+
+  for (const listing of listingsForRetailerCounts) {
+    const retailer = String(listing.retailer);
+    retailerCounts.set(retailer, (retailerCounts.get(retailer) ?? 0) + 1);
+  }
+
+  for (const listing of listingsForStatusCounts) {
+    const status = displayedAvailability(listing);
+    statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
+  }
+
+  const filteredListings = listings.filter(
+    (listing) =>
+      (!retailerFilter || String(listing.retailer) === retailerFilter) &&
+      (!statusFilter || displayedAvailability(listing) === statusFilter),
+  );
+  const hasFilters = Boolean(retailerFilter || statusFilter);
+
   return (
     <section className="panel">
       <div className="panel-head">
         <div>
           <h2>Retailer listings</h2>
           <p>Click any product name to open its retailer page directly.</p>
+        </div>
+      </div>
+      <div className="listing-filter-bar" data-testid="listing-filters">
+        <div className="listing-filter-group">
+          <span className="listing-filter-label">Retailer</span>
+          <div
+            className="listing-filter-options"
+            aria-label="Filter listings by retailer"
+          >
+            <Link
+              className={
+                retailerFilter
+                  ? "listing-filter-option"
+                  : "listing-filter-option listing-filter-option-active"
+              }
+              href={listingsUrl(projectId, undefined, statusFilter)}
+              scroll={false}
+              aria-current={retailerFilter ? undefined : "page"}
+              aria-label="Show listings from all retailers"
+            >
+              <span>All retailers</span>
+              <b>{listingsForRetailerCounts.length}</b>
+            </Link>
+            {retailers.map((retailer) => (
+              <Link
+                className={
+                  retailerFilter === retailer
+                    ? "listing-filter-option listing-filter-option-active"
+                    : "listing-filter-option"
+                }
+                href={listingsUrl(projectId, retailer, statusFilter)}
+                scroll={false}
+                aria-current={
+                  retailerFilter === retailer ? "page" : undefined
+                }
+                aria-label={`Show ${retailer} listings`}
+                key={retailer}
+              >
+                <span>{retailer}</span>
+                <b>{retailerCounts.get(retailer) ?? 0}</b>
+              </Link>
+            ))}
+          </div>
+        </div>
+        <div className="listing-filter-group">
+          <span className="listing-filter-label">Status</span>
+          <div
+            className="listing-filter-options"
+            aria-label="Filter listings by status"
+          >
+            <Link
+              className={
+                statusFilter
+                  ? "listing-filter-option"
+                  : "listing-filter-option listing-filter-option-active"
+              }
+              href={listingsUrl(projectId, retailerFilter)}
+              scroll={false}
+              aria-current={statusFilter ? undefined : "page"}
+              aria-label="Show listings with any status"
+            >
+              <span>All statuses</span>
+              <b>{listingsForStatusCounts.length}</b>
+            </Link>
+            {statuses.map((status) => (
+              <Link
+                className={
+                  statusFilter === status
+                    ? "listing-filter-option listing-filter-option-active"
+                    : "listing-filter-option"
+                }
+                href={listingsUrl(projectId, retailerFilter, status)}
+                scroll={false}
+                aria-current={statusFilter === status ? "page" : undefined}
+                aria-label={`Show ${formatAvailability(status)} listings`}
+                key={status}
+              >
+                <span>{formatAvailability(status)}</span>
+                <b>{statusCounts.get(status) ?? 0}</b>
+              </Link>
+            ))}
+          </div>
+        </div>
+        <div className="listing-filter-summary" aria-live="polite">
+          <span>
+            Showing <strong>{filteredListings.length}</strong> of{" "}
+            <strong>{listings.length}</strong> listings
+            {retailerFilter ? ` from ${retailerFilter}` : ""}
+            {statusFilter ? ` · ${formatAvailability(statusFilter)}` : ""}
+          </span>
+          {hasFilters ? (
+            <Link
+              className="listing-filter-clear"
+              href={listingsUrl(projectId)}
+              scroll={false}
+            >
+              Clear filters
+            </Link>
+          ) : null}
         </div>
       </div>
       <div className="table-wrap">
@@ -364,8 +610,8 @@ function ListingsView({ listings }: { listings: Row[] }) {
             </tr>
           </thead>
           <tbody>
-            {listings.map((listing) => (
-              <tr key={String(listing.id)}>
+            {filteredListings.map((listing) => (
+              <tr key={String(listing.id)} data-testid="listing-row">
                 <td className="primary-cell">
                   <a
                     className="product-link"
@@ -430,6 +676,26 @@ function ListingsView({ listings }: { listings: Row[] }) {
                 <td>{formatDate(listing.last_observed_at)}</td>
               </tr>
             ))}
+            {!filteredListings.length ? (
+              <tr>
+                <td colSpan={7}>
+                  <div className="listing-filter-empty">
+                    <strong>No listings match these filters.</strong>
+                    <span>
+                      Try another retailer or status, or{" "}
+                      <Link
+                        className="inline-link"
+                        href={listingsUrl(projectId)}
+                        scroll={false}
+                      >
+                        show every listing
+                      </Link>
+                      .
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>
@@ -439,18 +705,85 @@ function ListingsView({ listings }: { listings: Row[] }) {
 
 function RulesView({
   projectId,
+  project,
   rules,
 }: {
   projectId: string;
+  project: Row;
   rules: Row[];
 }) {
+  const scheduleMode = String(project.default_schedule_mode ?? "SYSTEM");
+  const scheduleSummary =
+    scheduleMode === "FIXED"
+      ? `Every ${Number(project.default_interval_seconds ?? 60)} seconds`
+      : scheduleMode === "BOUNDED"
+        ? `Randomized between ${Number(project.default_interval_min_seconds ?? 60)}-${Number(project.default_interval_max_seconds ?? 120)} seconds`
+        : `Adaptive, normally ${Number(project.default_interval_min_seconds ?? 60)}-${Number(project.default_interval_max_seconds ?? 120)} seconds`;
+
   return (
-    <div className="section-grid section-grid-balanced">
-      <section className="panel">
+    <div className="rules-view">
+      <section className="rule-pipeline" aria-labelledby="rule-pipeline-title">
+        <div className="rule-pipeline-head">
+          <div>
+            <p className="eyebrow">Detection pipeline</p>
+            <h2 id="rule-pipeline-title">How monitoring becomes an alert</h2>
+            <p>
+              Monitoring determines when DealHunter looks. Alert policies
+              determine what qualifies after each successful check.
+            </p>
+          </div>
+          <Link
+            className="button button-secondary"
+            href={`/projects/${projectId}?view=schedule`}
+          >
+            <Clock3 size={14} />
+            Change monitoring
+          </Link>
+        </div>
+        <div className="rule-pipeline-flow">
+          <article className="rule-pipeline-step">
+            <span className="rule-pipeline-icon">
+              <Radar size={17} />
+            </span>
+            <div>
+              <small>1. Check retailer</small>
+              <strong>{scheduleSummary}</strong>
+              <span>Each listing follows this default or its own override.</span>
+            </div>
+          </article>
+          <ChevronRight className="rule-pipeline-arrow" size={18} />
+          <article className="rule-pipeline-step">
+            <span className="rule-pipeline-icon">
+              <ShieldAlert size={17} />
+            </span>
+            <div>
+              <small>2. Evaluate policy</small>
+              <strong>Can an order be placed?</strong>
+              <span>Then apply the optional maximum price.</span>
+            </div>
+          </article>
+          <ChevronRight className="rule-pipeline-arrow" size={18} />
+          <article className="rule-pipeline-step">
+            <span className="rule-pipeline-icon">
+              <Bell size={17} />
+            </span>
+            <div>
+              <small>3. Send alert</small>
+              <strong>Notify on the first match</strong>
+              <span>No repeat alert until the condition becomes false again.</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <div className="section-grid section-grid-balanced">
+        <section className="panel">
         <div className="panel-head">
           <div>
-            <h2>Rules</h2>
-            <p>Rules without a price ceiling trigger on availability alone.</p>
+            <h2>Alert policies</h2>
+            <p>
+              These run after every successful retailer check.
+            </p>
           </div>
           <ShieldAlert size={18} />
         </div>
@@ -469,7 +802,7 @@ function RulesView({
                   <span>
                     <strong>{String(rule.name)}</strong>
                     <small>
-                      {String(rule.required_availability).replaceAll("_", " ")}
+                      Earliest ordering opportunity
                       {rule.max_price_cents === null
                         ? " · no price ceiling"
                         : ` · at or below ${formatMoney(rule.max_price_cents)}`}
@@ -499,19 +832,9 @@ function RulesView({
                       data-testid="edit-rule-name"
                     />
                   </div>
-                  <div className="field">
-                    <label htmlFor={`edit-rule-state-${String(rule.id)}`}>
-                      Availability
-                    </label>
-                    <select
-                      id={`edit-rule-state-${String(rule.id)}`}
-                      name="availability"
-                      defaultValue={String(rule.required_availability)}
-                    >
-                      <option value="IN_STOCK">In stock</option>
-                      <option value="PREORDER">Preorder</option>
-                      <option value="LIMITED">Limited</option>
-                    </select>
+                  <div className="rule-behavior-note">
+                    Match: ordering is open through buy now, preorder,
+                    backorder, or limited stock.
                   </div>
                   <div className="field">
                     <label htmlFor={`edit-rule-price-${String(rule.id)}`}>
@@ -542,15 +865,9 @@ function RulesView({
                     </label>
                   </div>
                   <div className="rule-behavior-note">
-                    Monitoring frequency is configured in the project{" "}
-                    <Link
-                      className="inline-link"
-                      href={`/projects/${projectId}?view=schedule`}
-                    >
-                      Schedule
-                    </Link>{" "}
-                    view. This rule alerts once when its confirmed condition
-                    changes from false to true.
+                    Evaluated after each successful check. Alerts once when the
+                    result changes from non-actionable to actionable and the
+                    price qualifies.
                   </div>
                   <div className="rule-editor-actions">
                     <span>
@@ -584,13 +901,15 @@ function RulesView({
             <div className="empty-state">No rules configured.</div>
           ) : null}
         </div>
-      </section>
+        </section>
 
-      <aside className="panel">
+        <aside className="panel">
         <div className="panel-head">
           <div>
-            <h2>Create rule</h2>
-            <p>Leave maximum price empty to act immediately on availability.</p>
+            <h2>Create alert policy</h2>
+            <p>
+              Define the price constraint applied after each retailer check.
+            </p>
           </div>
         </div>
         <form className="panel-body form-grid" action={createRuleAction}>
@@ -605,18 +924,6 @@ function RulesView({
             />
           </div>
           <div className="field">
-            <label htmlFor="rule-availability">Availability</label>
-            <select
-              id="rule-availability"
-              name="availability"
-              data-testid="rule-availability"
-            >
-              <option value="IN_STOCK">In stock</option>
-              <option value="PREORDER">Preorder</option>
-              <option value="LIMITED">Limited</option>
-            </select>
-          </div>
-          <div className="field">
             <label htmlFor="max-price">Maximum price (optional)</label>
             <input
               id="max-price"
@@ -629,15 +936,15 @@ function RulesView({
             />
           </div>
           <div className="rule-behavior-note field-wide">
-            This creates an alert rule only. Configure product check frequency
-            in the project{" "}
+            This policy does not run on its own timer. It evaluates the result
+            produced by{" "}
             <Link
               className="inline-link"
               href={`/projects/${projectId}?view=schedule`}
             >
-              Schedule
-            </Link>{" "}
-            view.
+              Monitoring
+            </Link>
+            .
           </div>
           <div className="form-actions">
             <button
@@ -645,11 +952,12 @@ function RulesView({
               type="submit"
               data-testid="create-rule"
             >
-              Activate rule
+              Activate alert
             </button>
           </div>
         </form>
-      </aside>
+        </aside>
+      </div>
     </div>
   );
 }
@@ -687,8 +995,8 @@ function ScheduleView({
               )}
               data-testid="project-schedule-mode"
             >
-              <option value="SYSTEM">System recommended</option>
-              <option value="FIXED">Fixed interval</option>
+              <option value="SYSTEM">Adaptive randomized (recommended)</option>
+              <option value="FIXED">Fixed interval (explicit override)</option>
               <option value="BOUNDED">Bounded range</option>
             </select>
           </div>
@@ -730,9 +1038,10 @@ function ScheduleView({
             />
           </div>
           <div className="rule-behavior-note field-wide">
-            Retailer safety limits can slow this cadence, but never make it
-            faster. Individual products can override the project default from
-            their product detail page.
+            Adaptive mode randomizes healthy checks within the minimum and
+            maximum, then backs off further when recent failure or rate-limit
+            rates rise. Retailer safety limits can slow this cadence, but never
+            make it faster.
           </div>
           <div className="form-actions">
             <button
@@ -1250,6 +1559,8 @@ export default async function ProjectPage({
     runSource?: string;
     runPage?: string;
     runPageSize?: string;
+    listingRetailer?: string;
+    listingStatus?: string;
   }>;
 }) {
   const { projectId } = await params;
@@ -1261,6 +1572,16 @@ export default async function ProjectPage({
   const data = getProject(projectId);
   if (!data) notFound();
   const { project, products, listings, rules, monitoringRuns } = data;
+  const retailerFilter = listings.some(
+    (listing) => String(listing.retailer) === query.listingRetailer,
+  )
+    ? query.listingRetailer
+    : undefined;
+  const statusFilter = listings.some(
+    (listing) => displayedAvailability(listing) === query.listingStatus,
+  )
+    ? query.listingStatus
+    : undefined;
   const runFilters: MonitoringRunFilters = {
     query: query.runQuery?.trim() || undefined,
     productId: query.runProduct || undefined,
@@ -1310,13 +1631,18 @@ export default async function ProjectPage({
           />
         ) : null}
         {activeView === "products" ? (
-          <ProductsView products={products} />
+          <ProductsView products={products} listings={listings} />
         ) : null}
         {activeView === "listings" ? (
-          <ListingsView listings={listings} />
+          <ListingsView
+            projectId={projectId}
+            listings={listings}
+            retailerFilter={retailerFilter}
+            statusFilter={statusFilter}
+          />
         ) : null}
         {activeView === "rules" ? (
-          <RulesView projectId={projectId} rules={rules} />
+          <RulesView projectId={projectId} project={project} rules={rules} />
         ) : null}
         {activeView === "schedule" ? (
           <ScheduleView project={project} listings={listings} />

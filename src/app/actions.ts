@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { audit, createId, getDatabase, nowIso } from "@/lib/db";
 import { formatAvailability } from "@/lib/format";
-import { runProjectScan } from "@/lib/monitoring";
+import { calculateNextSchedule, runProjectScan } from "@/lib/monitoring";
 import {
   assertAllowedDiscordWebhook,
   sendDiscordTest,
@@ -45,6 +45,46 @@ function retailerSlug(name: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function calculateInitialInheritedSchedule(
+  projectId: string,
+  retailerId: string | null,
+) {
+  const defaults = getDatabase()
+    .prepare(
+      `SELECT p.default_schedule_mode AS project_default_schedule_mode,
+              p.default_interval_seconds AS project_default_interval_seconds,
+              p.default_interval_min_seconds AS project_default_interval_min_seconds,
+              p.default_interval_max_seconds AS project_default_interval_max_seconds,
+              COALESCE(r.minimum_interval_seconds, 60) AS retailer_minimum_interval_seconds
+       FROM projects p
+       LEFT JOIN retailers r ON r.id = ?
+       WHERE p.id = ?`,
+    )
+    .get(retailerId, projectId) as
+    | {
+        project_default_schedule_mode: "SYSTEM" | "FIXED" | "BOUNDED";
+        project_default_interval_seconds: number;
+        project_default_interval_min_seconds: number;
+        project_default_interval_max_seconds: number;
+        retailer_minimum_interval_seconds: number;
+      }
+    | undefined;
+  if (!defaults) {
+    throw new Error("Project monitoring schedule was not found.");
+  }
+  return calculateNextSchedule(
+    {
+      schedule_mode: "INHERIT",
+      interval_seconds: 60,
+      interval_min_seconds: 60,
+      interval_max_seconds: 120,
+      ...defaults,
+    },
+    [],
+    "SUCCESS",
+  );
 }
 
 export async function createProjectAction(formData: FormData) {
@@ -152,7 +192,13 @@ export async function addProductFromUrlAction(formData: FormData) {
   const initialRunId = createId();
   const crawled = await crawlProductUrl(productId, sourceUrl.toString());
   const now = nowIso();
-  const nextRun = new Date(Date.now() + 60_000).toISOString();
+  const initialSchedule = calculateInitialInheritedSchedule(
+    projectId,
+    crawled.retailer.id,
+  );
+  const nextRun = new Date(
+    Date.now() + initialSchedule.intervalSeconds * 1000,
+  ).toISOString();
   const targetQuantity = Math.max(
     0,
     Number(text(formData, "targetQuantity") || "1"),
@@ -192,9 +238,9 @@ export async function addProductFromUrlAction(formData: FormData) {
          (id, product_id, retailer_id, retailer, retailer_sku, title, url,
           normalized_url, current_price_cents, current_availability,
           current_availability_text, selection_mode, interval_seconds,
-          schedule_mode, last_observed_at, next_run_at,
+          schedule_mode, schedule_reason, last_observed_at, next_run_at,
           observation_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EXACT', 60, 'INHERIT', ?, ?, 1, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EXACT', 60, 'INHERIT', ?, ?, ?, 1, ?)`,
       )
       .run(
         listingId,
@@ -208,6 +254,7 @@ export async function addProductFromUrlAction(formData: FormData) {
         crawled.priceCents,
         crawled.availability,
         formatAvailability(crawled.availability),
+        initialSchedule.reason,
         now,
         nextRun,
         now,
@@ -244,7 +291,7 @@ export async function addProductFromUrlAction(formData: FormData) {
         crawled.availability,
         formatAvailability(crawled.availability),
         crawled.priceCents,
-        "Product created from URL and queued for 60-second monitoring.",
+        `Product created from URL and queued for monitoring in ${initialSchedule.intervalSeconds} seconds.`,
       );
     database.exec("COMMIT");
   } catch (error) {
@@ -272,13 +319,17 @@ export async function addListingAction(formData: FormData) {
   const registeredRetailer = findRetailerForUrl(url);
   const id = createId();
   const now = nowIso();
+  const initialSchedule = calculateInitialInheritedSchedule(
+    projectId,
+    registeredRetailer?.id ?? null,
+  );
   getDatabase()
     .prepare(
       `INSERT INTO listings
        (id, product_id, retailer_id, retailer, title, url, normalized_url,
         current_price_cents, current_availability, selection_mode,
-        schedule_mode, interval_seconds, next_run_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', ?, 'INHERIT', ?, ?, ?)`,
+        schedule_mode, interval_seconds, schedule_reason, next_run_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', ?, 'INHERIT', ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -291,7 +342,10 @@ export async function addListingAction(formData: FormData) {
       optionalMoney(text(formData, "price")),
       text(formData, "selectionMode") || "EXACT",
       Math.max(60, Number(text(formData, "interval") || "60")),
-      now,
+      initialSchedule.reason,
+      new Date(
+        Date.now() + initialSchedule.intervalSeconds * 1000,
+      ).toISOString(),
       now,
     );
   audit("listing", id, "CREATED", `Added retailer listing ${url.hostname}.`);
@@ -316,9 +370,44 @@ export async function updateListingScheduleAction(formData: FormData) {
     minimum,
     Number(text(formData, "maximumSeconds") || String(minimum)),
   );
-  const firstInterval =
-    mode === "FIXED" ? fixed : mode === "BOUNDED" ? minimum : 60;
-  getDatabase()
+  const database = getDatabase();
+  const inheritedSchedule = database
+    .prepare(
+      `SELECT p.default_schedule_mode AS project_default_schedule_mode,
+              p.default_interval_seconds AS project_default_interval_seconds,
+              p.default_interval_min_seconds AS project_default_interval_min_seconds,
+              p.default_interval_max_seconds AS project_default_interval_max_seconds,
+              COALESCE(r.minimum_interval_seconds, 60) AS retailer_minimum_interval_seconds
+       FROM listings l
+       JOIN products pr ON pr.id = l.product_id
+       JOIN projects p ON p.id = pr.project_id
+       LEFT JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.id = ? AND l.product_id = ?`,
+    )
+    .get(listingId, productId) as
+    | {
+        project_default_schedule_mode: "SYSTEM" | "FIXED" | "BOUNDED";
+        project_default_interval_seconds: number;
+        project_default_interval_min_seconds: number;
+        project_default_interval_max_seconds: number;
+        retailer_minimum_interval_seconds: number;
+      }
+    | undefined;
+  if (!inheritedSchedule) {
+    throw new Error("Listing schedule target was not found.");
+  }
+  const schedule = calculateNextSchedule(
+    {
+      schedule_mode: mode as "INHERIT" | "SYSTEM" | "FIXED" | "BOUNDED",
+      interval_seconds: fixed,
+      interval_min_seconds: minimum,
+      interval_max_seconds: maximum,
+      ...inheritedSchedule,
+    },
+    [],
+    "SUCCESS",
+  );
+  database
     .prepare(
       `UPDATE listings
        SET schedule_mode = ?, interval_seconds = ?,
@@ -331,14 +420,8 @@ export async function updateListingScheduleAction(formData: FormData) {
       fixed,
       minimum,
       maximum,
-      new Date(Date.now() + firstInterval * 1000).toISOString(),
-      mode === "SYSTEM"
-        ? "System recommendation will use recent retailer health history."
-        : mode === "INHERIT"
-          ? "This listing inherits the project monitoring schedule."
-        : mode === "FIXED"
-          ? `User selected a fixed ${fixed}-second interval.`
-          : `User selected a bounded ${minimum}-${maximum}-second interval.`,
+      new Date(Date.now() + schedule.intervalSeconds * 1000).toISOString(),
+      schedule.reason,
       listingId,
       productId,
     );
@@ -349,6 +432,37 @@ export async function updateListingScheduleAction(formData: FormData) {
     `Set schedule mode to ${mode}.`,
   );
   revalidatePath(`/products/${productId}`);
+}
+
+export async function deleteListingAction(formData: FormData) {
+  const listingId = text(formData, "listingId");
+  const productId = text(formData, "productId");
+  const database = getDatabase();
+  const listing = database
+    .prepare(
+      `SELECT l.title, l.retailer, pr.project_id
+       FROM listings l
+       JOIN products pr ON pr.id = l.product_id
+       WHERE l.id = ? AND l.product_id = ?`,
+    )
+    .get(listingId, productId) as
+    | { title: string; retailer: string; project_id: string }
+    | undefined;
+  if (!listing) {
+    throw new Error("Listing to remove was not found.");
+  }
+
+  database
+    .prepare("DELETE FROM listings WHERE id = ? AND product_id = ?")
+    .run(listingId, productId);
+  audit(
+    "listing",
+    listingId,
+    "DELETED",
+    `Removed ${listing.title} monitoring from ${listing.retailer}.`,
+  );
+  revalidatePath(`/products/${productId}`);
+  revalidatePath(`/projects/${listing.project_id}`);
 }
 
 export async function relearnListingAction(formData: FormData) {
@@ -579,14 +693,13 @@ export async function createRuleAction(formData: FormData) {
        (id, project_id, name, max_price_cents, required_availability,
         action_alert, action_purchase, allow_random_variant, quantity,
         cooldown_minutes, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, 0, 0, 1, 0, 1, ?)`,
+       VALUES (?, ?, ?, ?, 'ACTIONABLE', 1, 0, 0, 1, 0, 1, ?)`,
     )
     .run(
       id,
       projectId,
       text(formData, "name"),
       optionalMoney(text(formData, "maxPrice")),
-      text(formData, "availability") || "IN_STOCK",
       nowIso(),
     );
   audit("rule", id, "CREATED", `Created rule ${text(formData, "name")}.`);
@@ -601,7 +714,7 @@ export async function updateRuleAction(formData: FormData) {
   getDatabase()
     .prepare(
       `UPDATE rules
-       SET name = ?, max_price_cents = ?, required_availability = ?,
+       SET name = ?, max_price_cents = ?, required_availability = 'ACTIONABLE',
            action_purchase = 0, allow_random_variant = 0, quantity = 1,
            cooldown_minutes = 0, enabled = ?
        WHERE id = ? AND project_id = ?`,
@@ -609,7 +722,6 @@ export async function updateRuleAction(formData: FormData) {
     .run(
       name,
       optionalMoney(text(formData, "maxPrice")),
-      text(formData, "availability") || "IN_STOCK",
       formData.get("enabled") ? 1 : 0,
       id,
       projectId,

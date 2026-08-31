@@ -4,6 +4,17 @@ import { enrichNextProduct } from "../src/lib/product-crawler";
 const once = process.argv.includes("--once");
 let tickRunning = false;
 
+function scheduleNextTick() {
+  const delayMs = 5_000 + Math.floor(Math.random() * 10_001);
+  setTimeout(() => {
+    void runTick()
+      .catch((error) => {
+        console.error(error);
+      })
+      .finally(scheduleNextTick);
+  }, delayMs);
+}
+
 async function tick() {
   const count = await runDueScans();
   const enriched = await enrichNextProduct();
@@ -30,11 +41,7 @@ async function runTick() {
 async function main() {
   await runTick();
   if (!once) {
-    setInterval(() => {
-      void runTick().catch((error) => {
-        console.error(error);
-      });
-    }, 10_000);
+    scheduleNextTick();
   }
 }
 

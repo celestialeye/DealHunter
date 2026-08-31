@@ -9,7 +9,9 @@ export function StatusBadge({
 }) {
   const normalized = String(value ?? "UNKNOWN");
   const tone =
-    normalized === "IN_STOCK" || normalized === "DELIVERED"
+    normalized === "IN_STOCK" ||
+    normalized === "DELIVERED" ||
+    normalized === "SUCCESS"
       ? "success"
       : normalized === "COMING_SOON" ||
           normalized === "PREORDER" ||

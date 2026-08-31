@@ -18,13 +18,21 @@ Implemented functionality includes:
 - Live Best Buy HTTP monitoring using fulfillment button state.
 - Live Target monitoring using a rendered primary-product section and primary button state.
 - Product detail pages with locally cached images for all 18 products in the Pokémon project.
-- Fixed, bounded-range, and system-recommended monitoring schedules.
+- Adaptive randomized schedules with project inheritance, retailer floors,
+  bounded ranges, and explicit fixed overrides.
 - Per-check logs, filters, pagination, and product monitoring timelines.
+- Product planning with separate retailer, latest result, check status, and
+  last-checked columns, including direct retailer product links.
+- Project listing filters by retailer and availability status.
+- Listing removal from product detail pages.
 - Discord webhook delivery.
 - Rule editing and deletion.
+- Actionable alert policies covering in-stock, preorder, backorder, and limited
+  ordering states.
 - A modular challenge-handler interface with a safe default implementation.
 - Evidence classes recorded on snapshots and monitoring runs.
-- Fresh second-observation confirmation for authoritative `IN_STOCK` candidates.
+- Fresh second-observation confirmation for authoritative actionable
+  candidates.
 - Separate confirmed availability, price, and timestamp fields.
 - Per-rule/per-listing predicate transition state.
 - Unique alert transition keys preventing duplicate alerts.
@@ -88,7 +96,7 @@ availability: UNKNOWN
 confidence: 0
 ```
 
-It preserves the prior confirmed product state and applies a system-recommended cooldown of approximately 15 minutes rather than retrying every minute.
+It preserves the prior confirmed product state and applies a system-recommended cooldown of approximately 15 minutes rather than retrying at the healthy cadence.
 
 The application also stores a separately labeled first-party search-index hint for SKUs whose indexed official page currently says unavailable:
 
@@ -282,7 +290,7 @@ Implemented:
 
 - Evidence class persisted with snapshots and monitoring runs.
 - Generic SEO metadata cannot independently establish an in-stock result.
-- Authoritative in-stock candidates receive a fresh second observation.
+- Authoritative actionable candidates receive a fresh second observation.
 - Failed confirmation cannot update confirmed availability.
 - Failed and unknown attempts do not overwrite confirmed availability or price.
 - Rule state is tracked per rule and listing.
@@ -312,7 +320,8 @@ The system does prevent overlapping ticks inside the current local worker, but t
 The current application uses:
 
 - Node's local SQLite implementation.
-- A local `setInterval` monitoring worker.
+- A local randomized `setTimeout` monitoring worker with in-process scan
+  pacing.
 - A single-machine filesystem image cache.
 - In-process scheduling calculations.
 
@@ -377,12 +386,17 @@ Current automated coverage includes:
 - Best Buy fulfillment versus JSON-LD conflict.
 - Target disabled Add to cart handling.
 - Pokémon Center challenge-shell detection.
-- Fixed, bounded, and system schedule calculation.
+- Fixed, bounded, inherited, and adaptive randomized schedule calculation.
+- Backoff windows for failures, rate limits, and challenge responses.
+- Actionable availability matching for in-stock, preorder, backorder, and
+  limited states.
 - Discord embed generation.
 - Dashboard navigation.
 - Project and product creation.
 - Listing and rule creation.
+- Listing filtering and removal.
 - Rule editing and deletion.
+- Per-retailer product results, check status, timestamps, and direct links.
 - Repeated monitoring runs.
 - Run-log filtering and pagination.
 - Product timeline filtering and pagination.

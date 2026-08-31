@@ -9,11 +9,13 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Store,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import {
+  deleteListingAction,
   refreshProductDetailsAction,
   relearnListingAction,
   updateListingScheduleAction,
@@ -337,8 +339,12 @@ export default async function ProductPage({
                     data-testid="schedule-mode"
                   >
                     <option value="INHERIT">Use project default</option>
-                    <option value="SYSTEM">System recommended</option>
-                    <option value="FIXED">Fixed interval</option>
+                    <option value="SYSTEM">
+                      Adaptive randomized (recommended)
+                    </option>
+                    <option value="FIXED">
+                      Fixed interval (explicit override)
+                    </option>
                     <option value="BOUNDED">Bounded range</option>
                   </select>
                 </div>
@@ -390,7 +396,7 @@ export default async function ProductPage({
                 <p className="schedule-reason">
                   {String(
                     listing.schedule_reason ||
-                      "System mode adapts to measured retailer health and rate-limit history.",
+                      "Adaptive mode randomizes healthy checks and backs off when retailer failure or rate-limit rates rise.",
                   )}
                 </p>
                 <button
@@ -411,8 +417,29 @@ export default async function ProductPage({
               Open product page
               <ExternalLink size={14} />
             </a>
+            <form className="listing-remove-form" action={deleteListingAction}>
+              <input
+                type="hidden"
+                name="listingId"
+                value={String(listing.id)}
+              />
+              <input type="hidden" name="productId" value={productId} />
+              <button
+                className="retailer-delete listing-remove"
+                type="submit"
+                data-testid="remove-listing"
+              >
+                <Trash2 size={14} />
+                Remove monitoring
+              </button>
+            </form>
           </article>
         ))}
+        {!listings.length ? (
+          <div className="empty-state retailer-card-empty">
+            No retailer listings are being monitored for this product.
+          </div>
+        ) : null}
       </section>
 
       {learningRuns.length ? (
