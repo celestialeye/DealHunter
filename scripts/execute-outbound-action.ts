@@ -204,17 +204,17 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
     }
 
     const cartCountBefore = await targetCartItemCount(page);
-    const targetErrorDialogClose = page
-      .locator("[data-floating-ui-portal]")
-      .filter({ hasText: "Something went wrong" })
-      .first()
-      .locator('button[aria-label="close"]')
-      .first();
 
     try {
       await addToCartButton.click({ timeout: 5_000 });
     } catch (error) {
-      if ((await targetErrorDialogClose.count()) === 0) throw error;
+      if (
+        !(error instanceof Error) ||
+        !error.message.includes("styles_overlay__") ||
+        !error.message.includes("intercepts pointer events")
+      ) {
+        throw error;
+      }
       await addToCartButton.click({ force: true, timeout: 5_000 });
     }
 
