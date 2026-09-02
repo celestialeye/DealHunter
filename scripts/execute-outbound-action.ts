@@ -174,6 +174,17 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       timeout: 30_000,
     });
 
+    const errorDialog = page
+      .getByRole("dialog")
+      .filter({ hasText: "Something went wrong" })
+      .first();
+    if (await errorDialog.isVisible()) {
+      await errorDialog
+        .getByRole("button", { name: "close", exact: true })
+        .click();
+      await errorDialog.waitFor({ state: "hidden", timeout: 10_000 });
+    }
+
     const addToCartButtons = page.locator(
       'button[data-test="shippingButton"]',
       {
