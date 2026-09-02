@@ -174,11 +174,17 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       timeout: 30_000,
     });
 
-    const addToCartButton = await firstVisibleEnabled(
-      page.locator('button[data-test="shippingButton"]', {
+    const addToCartButtons = page.locator(
+      'button[data-test="shippingButton"]',
+      {
         hasText: "Add to cart",
-      }),
+      },
     );
+    await addToCartButtons.first().waitFor({
+      state: "visible",
+      timeout: 30_000,
+    });
+    const addToCartButton = await firstVisibleEnabled(addToCartButtons);
     if (!addToCartButton) {
       throw new Error("Target did not present an enabled Add to cart button.");
     }
