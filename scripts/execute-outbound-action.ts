@@ -159,18 +159,13 @@ async function firstVisibleEnabled(locator: Locator): Promise<Locator | null> {
   return null;
 }
 
-async function dismissTargetErrorDialog(page: Page): Promise<boolean> {
-  const errorDialog = page
-    .getByRole("dialog")
-    .filter({ hasText: "Something went wrong" })
-    .first();
-  if (!(await errorDialog.isVisible())) return false;
-
-  await errorDialog
-    .getByRole("button", { name: "close", exact: true })
-    .click();
-  await errorDialog.waitFor({ state: "hidden", timeout: 10_000 });
-  return true;
+async function targetCartItemCount(page: Page): Promise<number | null> {
+  const label = await page
+    .locator('a[data-test="@web/CartLink"]')
+    .first()
+    .getAttribute("aria-label");
+  const match = label?.match(/^cart\s+(\d+)\s+items?$/i);
+  return match ? Number(match[1]) : null;
 }
 
 async function addTargetItemToCart(productUrl: string): Promise<void> {
@@ -208,37 +203,49 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       throw new Error("Target did not present an enabled Add to cart button.");
     }
 
-    let clicked = false;
-    for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {
-      await dismissTargetErrorDialog(page);
-      try {
-        await addToCartButton.click({ timeout: 10_000 });
-        clicked = true;
-      } catch (error) {
-        if (!(await dismissTargetErrorDialog(page))) throw error;
-      }
-    }
-    if (!clicked) {
-      throw new Error("Target's error dialog repeatedly blocked the cart.");
-    }
+    const cartCountBefore = await targetCartItemCount(page);
+    const targetErrorDialogVisible = await page
+      .getByRole("dialog")
+      .filter({ hasText: "Something went wrong" })
+      .first()
+      .isVisible();
 
-    await Promise.any([
-      page
-        .getByText(/added to cart/i)
-        .first()
-        .waitFor({ state: "visible", timeout: 20_000 }),
-      page
-        .getByRole("link", { name: /view cart/i })
-        .first()
-        .waitFor({ state: "visible", timeout: 20_000 }),
-      page
-        .getByRole("button", { name: /view cart/i })
-        .first()
-        .waitFor({ state: "visible", timeout: 20_000 }),
-      page.waitForURL(/\/cart(?:[/?#]|$)/, { timeout: 20_000 }),
-    ]).catch(() => {
-      throw new Error("Target did not confirm that the item was added.");
+    await addToCartButton.click({
+      force: targetErrorDialogVisible,
+      timeout: 10_000,
     });
+
+    if (cartCountBefore !== null) {
+      await page.waitForFunction(
+        (previousCount) => {
+          const label = document
+            .querySelector('a[data-test="@web/CartLink"]')
+            ?.getAttribute("aria-label");
+          const match = label?.match(/^cart\s+(\d+)\s+items?$/i);
+          return match ? Number(match[1]) === previousCount + 1 : false;
+        },
+        cartCountBefore,
+        { timeout: 20_000 },
+      );
+    } else {
+      await Promise.any([
+        page
+          .getByText(/added to cart/i)
+          .first()
+          .waitFor({ state: "visible", timeout: 20_000 }),
+        page
+          .getByRole("link", { name: /view cart/i })
+          .first()
+          .waitFor({ state: "visible", timeout: 20_000 }),
+        page
+          .getByRole("button", { name: /view cart/i })
+          .first()
+          .waitFor({ state: "visible", timeout: 20_000 }),
+        page.waitForURL(/\/cart(?:[/?#]|$)/, { timeout: 20_000 }),
+      ]).catch(() => {
+        throw new Error("Target did not confirm that the item was added.");
+      });
+    }
   } finally {
     await session.close();
   }
