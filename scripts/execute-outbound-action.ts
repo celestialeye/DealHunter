@@ -214,7 +214,7 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
     try {
       await addToCartButton.click({ timeout: 5_000 });
     } catch (error) {
-      if (!(await targetErrorDialogClose.isVisible())) throw error;
+      if ((await targetErrorDialogClose.count()) === 0) throw error;
       await addToCartButton.click({ force: true, timeout: 5_000 });
     }
 
