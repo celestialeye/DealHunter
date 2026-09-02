@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "worker": "tsx scripts/monitor.ts",
     "worker:once": "tsx scripts/monitor.ts --once",
+    "outbound:execute": "tsx scripts/execute-outbound-action.ts",
     "images:mine": "tsx scripts/mine-project-images.ts",
     "recipes:learn": "tsx scripts/learn-project.ts",
     "test": "vitest run",

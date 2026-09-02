@@ -1,0 +1,48 @@
+name: Execute approved outbound action
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Approved outbound-action issue number
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: outbound-action-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'approval:approved'
+    runs-on: [self-hosted, Windows, X64, target-shopping]
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Execute approved issue
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_CHROME_CDP_URL: ${{ vars.TARGET_CHROME_CDP_URL }}
+          TARGET_CHROME_PROFILE: ${{ vars.TARGET_CHROME_PROFILE }}
+          TARGET_CHROME_USER_DATA_DIR: ${{ vars.TARGET_CHROME_USER_DATA_DIR }}
+        run: >-
+          npm run outbound:execute --
+          --issue-number "${{ github.event.issue.number || inputs.issue_number }}"
