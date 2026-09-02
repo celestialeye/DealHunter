@@ -1,4 +1,5 @@
 import { runDueScans } from "../src/lib/monitoring";
+import { runNextCartAction } from "../src/lib/cart-executor";
 import { enrichNextProduct } from "../src/lib/product-crawler";
 
 const once = process.argv.includes("--once");
@@ -17,9 +18,10 @@ function scheduleNextTick() {
 
 async function tick() {
   const count = await runDueScans();
+  const cart = await runNextCartAction();
   const enriched = await enrichNextProduct();
   console.log(
-    `[${new Date().toISOString()}] completed ${count} due observation(s), ${enriched} metadata crawl(s)`,
+    `[${new Date().toISOString()}] completed ${count} due observation(s), ${cart.succeeded}/${cart.processed} cart action(s), ${enriched} metadata crawl(s)`,
   );
 }
 

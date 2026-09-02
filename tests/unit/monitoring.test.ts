@@ -17,6 +17,7 @@ function listing(overrides: Partial<ListingRecord> = {}): ListingRecord {
     project_id: "project-1",
     product_id: "product-1",
     product_name: "Pokémon Center Elite Trainer Box",
+    retailer_id: "retailer-pokemon-center",
     retailer: "Pokémon Center",
     title: "Pokémon Center Elite Trainer Box",
     url: "https://www.pokemoncenter.com/product/10-10447-111/example",
@@ -38,6 +39,9 @@ function listing(overrides: Partial<ListingRecord> = {}): ListingRecord {
     last_observed_at: null,
     next_run_at: new Date(0).toISOString(),
     observation_count: 0,
+    auto_add_to_cart: 0,
+    auto_add_terms_version: null,
+    auto_add_enabled_at: null,
     ...overrides,
   };
 }
@@ -287,6 +291,34 @@ describe("parseTargetProductSection", () => {
       availability: "IN_STOCK",
       priceCents: 1999,
       displayAvailabilityText: "Add to cart",
+    });
+  });
+
+  it("requires an enabled primary preorder control", () => {
+    const section = `
+      Example Product
+      $29.99
+      Preorder
+    `;
+
+    expect(parseTargetProductSection(section, null)).toEqual({
+      availability: "UNKNOWN",
+      priceCents: 2999,
+      displayAvailabilityText: null,
+    });
+    expect(
+      parseTargetProductSection(section, null, false, false, false, true),
+    ).toEqual({
+      availability: "OUT_OF_STOCK",
+      priceCents: 2999,
+      displayAvailabilityText: null,
+    });
+    expect(
+      parseTargetProductSection(section, null, false, false, true, true),
+    ).toEqual({
+      availability: "PREORDER",
+      priceCents: 2999,
+      displayAvailabilityText: "Preorder",
     });
   });
 });

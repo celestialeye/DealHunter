@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  extractTargetProductId,
   isApprovedOutboundAction,
   parseOutboundActionIssue,
   validateTargetProductUrl,
@@ -51,6 +52,14 @@ describe("validateTargetProductUrl", () => {
     expect(() =>
       validateTargetProductUrl("https://www.target.com/cart"),
     ).toThrow("Target product page");
+  });
+
+  it("extracts the exact Target product ID", () => {
+    expect(
+      extractTargetProductId(
+        "https://www.target.com/p/example-product/-/A-95113212",
+      ),
+    ).toBe("A-95113212");
   });
 });
 

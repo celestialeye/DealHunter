@@ -12,6 +12,7 @@ describe("buildDiscordPayload", () => {
         project_id: "project-1",
         product_id: "product-1",
         product_name: "Booster Bundle",
+        retailer_id: null,
         retailer: "Mock Shop",
         title: "Six pack bundle",
         url: "https://mock.dealhunter.local/deal?price=14.99",
@@ -33,6 +34,9 @@ describe("buildDiscordPayload", () => {
         last_observed_at: null,
         next_run_at: new Date(0).toISOString(),
         observation_count: 0,
+        auto_add_to_cart: 0,
+        auto_add_terms_version: null,
+        auto_add_enabled_at: null,
       },
     });
 

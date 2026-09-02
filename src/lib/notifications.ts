@@ -125,15 +125,20 @@ async function deliver(
 }
 
 export async function deliverAlertToDiscord(
+  projectId: string,
   alertId: string,
   payload: DiscordEmbedPayload,
 ) {
   const channels = getDatabase()
     .prepare(
-      `SELECT id FROM notification_channels
-       WHERE type = 'DISCORD' AND enabled = 1`,
+      `SELECT c.id
+       FROM notification_channels c
+       JOIN project_notification_channels pc ON pc.channel_id = c.id
+       WHERE pc.project_id = ?
+         AND c.type = 'DISCORD'
+         AND c.enabled = 1`,
     )
-    .all() as Array<{ id: string }>;
+    .all(projectId) as Array<{ id: string }>;
   await Promise.all(
     channels.map((channel) => deliver(channel.id, payload, alertId)),
   );

@@ -135,6 +135,10 @@ test("creates and monitors a deal hunt end to end", async ({ page }) => {
   await expect(page.getByText(updatedRuleName).first()).toBeVisible();
 
   await page.goto("/settings");
+  await page.getByTestId("cart-chrome-profile").fill("Peter");
+  await page.getByTestId("save-cart-profile").click();
+  await page.reload();
+  await expect(page.getByTestId("cart-chrome-profile")).toHaveValue("Peter");
   await page.getByTestId("discord-name").fill(discordName);
   await page
     .getByTestId("discord-webhook")
@@ -142,12 +146,24 @@ test("creates and monitors a deal hunt end to end", async ({ page }) => {
   await page.getByTestId("save-discord").click();
   await expect(page.getByText(discordName).first()).toBeVisible();
   await page.getByTestId("send-discord-test").click();
-  await expect(page.getByTestId("delivery-row").first()).toContainText(
+  const discordRow = page.getByRole("row").filter({ hasText: discordName });
+  await expect(discordRow.getByTestId("channel-test-status")).toContainText(
     "Delivered",
   );
   await expect(page.getByTestId("discord-captures")).toContainText(
     "DealHunter connection verified",
   );
+
+  await page.goto(`${projectUrl}?view=rules`);
+  const projectChannel = page
+    .locator(".destination-option")
+    .filter({ hasText: discordName })
+    .getByTestId("project-alert-channel");
+  await expect(projectChannel).not.toBeChecked();
+  await expect(page.getByText("Record in project alerts only")).toBeVisible();
+  await projectChannel.check();
+  await page.getByTestId("save-project-alert-delivery").click();
+  await expect(page.getByText("Send to 1 project destination")).toBeVisible();
 
   await page.goto(projectUrl);
   for (let index = 0; index < 12; index += 1) {
@@ -210,10 +226,17 @@ test("creates and monitors a deal hunt end to end", async ({ page }) => {
     page.getByText("Purchase automation is separate from alert rules"),
   ).toBeVisible();
 
-  await page.goto("/settings");
+  await page.goto(`${projectUrl}?view=rules`);
   await expect(page.getByTestId("delivery-row").first()).toContainText(
     "Delivered",
   );
+  await expect(page.getByTestId("delivery-row").first()).toContainText(
+    discordName,
+  );
+  await page.goto("/settings");
+  await expect(
+    page.getByRole("heading", { name: "Delivery ledger" }),
+  ).toHaveCount(0);
   await expect(page.getByTestId("discord-captures")).toContainText(productName);
 
   await page.goto(`${projectUrl}?view=rules`);
@@ -329,6 +352,18 @@ test("adds a crawled product by URL and manages retailer records", async ({
   );
   await expect(page.getByTestId("learning-effort")).toHaveValue("medium");
   await expect(page.getByTestId("screening-engine")).toHaveValue("AUTO");
+
+  await page.goto("/products/pokemon-etb");
+  const targetListing = page
+    .locator(".retailer-card")
+    .filter({ hasText: "Target" });
+  await targetListing.getByTestId("auto-add-to-cart").check();
+  await targetListing.getByTestId("save-auto-add-to-cart").click();
+  await page.reload();
+  await expect(
+    page.locator(".retailer-card").filter({ hasText: "Target" })
+      .getByTestId("auto-add-to-cart"),
+  ).toBeChecked();
 
   await page.goto(productUrl);
   await page.getByTestId("remove-listing").click();

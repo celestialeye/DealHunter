@@ -8,6 +8,10 @@ import { audit, createId, getDatabase, nowIso } from "@/lib/db";
 import { formatAvailability } from "@/lib/format";
 import { calculateNextSchedule, runProjectScan } from "@/lib/monitoring";
 import {
+  CART_AUTOMATION_TERMS_VERSION,
+  cartProductKey,
+} from "@/lib/cart-actions";
+import {
   assertAllowedDiscordWebhook,
   sendDiscordTest,
 } from "@/lib/notifications";
@@ -434,6 +438,91 @@ export async function updateListingScheduleAction(formData: FormData) {
   revalidatePath(`/products/${productId}`);
 }
 
+export async function updateListingAutoCartAction(formData: FormData) {
+  const listingId = text(formData, "listingId");
+  const enabled = formData.get("autoAddToCart") === "on";
+  const database = getDatabase();
+  const listing = database
+    .prepare(
+      `SELECT l.product_id, l.retailer_id, l.url, pr.project_id
+       FROM listings l
+       JOIN products pr ON pr.id = l.product_id
+       WHERE l.id = ?`,
+    )
+    .get(listingId) as
+    | {
+        product_id: string;
+        project_id: string;
+        retailer_id: string | null;
+        url: string;
+      }
+    | undefined;
+  if (!listing) {
+    throw new Error("Listing auto-cart target was not found.");
+  }
+  if (enabled) {
+    if (!listing.retailer_id) {
+      throw new Error("Listing retailer is not configured.");
+    }
+    cartProductKey(listing.retailer_id, listing.url);
+  }
+
+  const updatedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database
+      .prepare(
+        `UPDATE listings
+         SET auto_add_to_cart = ?, auto_add_terms_version = ?,
+             auto_add_enabled_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        enabled ? 1 : 0,
+        enabled ? CART_AUTOMATION_TERMS_VERSION : null,
+        enabled ? updatedAt : null,
+        listingId,
+      );
+    if (enabled) {
+      database
+        .prepare(
+          `INSERT INTO cart_listing_states
+           (listing_id, eligible_match, episode_sequence,
+            last_action_episode_sequence, updated_at)
+           VALUES (?, 0, 0, 0, ?)
+           ON CONFLICT(listing_id) DO NOTHING`,
+        )
+        .run(listingId, updatedAt);
+    } else {
+      database
+        .prepare(
+          `UPDATE cart_actions
+           SET status = 'SKIPPED',
+               error_message = 'Listing auto-add approval was disabled.',
+               completed_at = ?, updated_at = ?
+           WHERE listing_id = ? AND status = 'PENDING'`,
+        )
+        .run(updatedAt, updatedAt, listingId);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+
+  audit(
+    "listing",
+    listingId,
+    enabled ? "AUTO_CART_ENABLED" : "AUTO_CART_DISABLED",
+    enabled
+      ? `Approved automatic one-unit cart additions under terms ${CART_AUTOMATION_TERMS_VERSION}; checkout remains disabled.`
+      : "Revoked automatic cart-add approval.",
+  );
+  revalidatePath(`/products/${listing.product_id}`);
+  revalidatePath(`/projects/${listing.project_id}`);
+  revalidatePath("/settings");
+}
+
 export async function deleteListingAction(formData: FormData) {
   const listingId = text(formData, "listingId");
   const productId = text(formData, "productId");
@@ -741,6 +830,66 @@ export async function deleteRuleAction(formData: FormData) {
   revalidatePath(`/projects/${projectId}`);
 }
 
+export async function updateProjectAlertDestinationsAction(
+  formData: FormData,
+) {
+  const projectId = text(formData, "projectId");
+  const database = getDatabase();
+  const project = database
+    .prepare("SELECT id FROM projects WHERE id = ?")
+    .get(projectId);
+  if (!project) {
+    throw new Error("Project was not found.");
+  }
+
+  const selectedIds = [
+    ...new Set(
+      formData
+        .getAll("channelId")
+        .map((value) => String(value).trim())
+        .filter(Boolean),
+    ),
+  ];
+  const availableIds = new Set(
+    (
+      database
+        .prepare("SELECT id FROM notification_channels WHERE enabled = 1")
+        .all() as Array<{ id: string }>
+    ).map((channel) => channel.id),
+  );
+  if (selectedIds.some((channelId) => !availableIds.has(channelId))) {
+    throw new Error("One or more alert destinations are unavailable.");
+  }
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database
+      .prepare("DELETE FROM project_notification_channels WHERE project_id = ?")
+      .run(projectId);
+    const insert = database.prepare(
+      `INSERT INTO project_notification_channels
+       (project_id, channel_id, created_at)
+       VALUES (?, ?, ?)`,
+    );
+    const createdAt = nowIso();
+    for (const channelId of selectedIds) {
+      insert.run(projectId, channelId, createdAt);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+
+  audit(
+    "project",
+    projectId,
+    "ALERT_DESTINATIONS_UPDATED",
+    `Selected ${selectedIds.length} external alert destination(s).`,
+  );
+  revalidatePath(`/projects/${projectId}`);
+}
+
 export async function runProjectScanAction(formData: FormData) {
   const projectId = text(formData, "projectId");
   await runProjectScan(projectId);
@@ -794,6 +943,29 @@ export async function updateLearningSettingsAction(formData: FormData) {
     "default",
     "UPDATED",
     `DOM model=${domModel}; visual model=${visualModel}; screening=${screeningEngine}; effort=${effort}.`,
+  );
+  revalidatePath("/settings");
+}
+
+export async function updateCartAutomationProfileAction(formData: FormData) {
+  const profileName = z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .parse(text(formData, "chromeProfileName"));
+  getDatabase()
+    .prepare(
+      `UPDATE cart_automation_settings
+       SET chrome_profile_name = ?, updated_at = ?
+       WHERE id = 'default'`,
+    )
+    .run(profileName, nowIso());
+  audit(
+    "cart_automation_settings",
+    "default",
+    "PROFILE_UPDATED",
+    `Bound automatic cart actions to Chrome profile ${profileName}.`,
   );
   revalidatePath("/settings");
 }

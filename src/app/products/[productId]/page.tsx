@@ -18,6 +18,7 @@ import {
   deleteListingAction,
   refreshProductDetailsAction,
   relearnListingAction,
+  updateListingAutoCartAction,
   updateListingScheduleAction,
 } from "@/app/actions";
 import { StatusBadge } from "@/components/status-badge";
@@ -314,6 +315,42 @@ export default async function ProductPage({
                 {listing.active_recipe_id
                   ? "Relearn monitoring"
                   : "Learn monitoring"}
+              </button>
+            </form>
+            <form
+              className="auto-cart-form"
+              action={updateListingAutoCartAction}
+            >
+              <input
+                type="hidden"
+                name="listingId"
+                value={String(listing.id)}
+              />
+              <label
+                className="auto-cart-option"
+                htmlFor={`auto-cart-${String(listing.id)}`}
+              >
+                <input
+                  id={`auto-cart-${String(listing.id)}`}
+                  name="autoAddToCart"
+                  type="checkbox"
+                  defaultChecked={Boolean(listing.auto_add_to_cart)}
+                  data-testid="auto-add-to-cart"
+                />
+                <span>
+                  Auto add one unit after confirmed in-stock or preorder
+                </span>
+              </label>
+              <small>
+                Checking this box is approval to add to cart only. Checkout and
+                purchase are never attempted.
+              </small>
+              <button
+                className="button button-secondary"
+                type="submit"
+                data-testid="save-auto-add-to-cart"
+              >
+                Save auto-cart approval
               </button>
             </form>
             <details className="schedule-editor">

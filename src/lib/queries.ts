@@ -174,6 +174,34 @@ export function getProject(id: string) {
     .prepare("SELECT * FROM rules WHERE project_id = ? ORDER BY created_at DESC")
     .all(id) as Array<Record<string, string | number | null>>;
 
+  const notificationChannels = database
+    .prepare(
+      `SELECT c.id, c.name, c.type, c.enabled, c.created_at,
+        EXISTS (
+          SELECT 1
+          FROM project_notification_channels pc
+          WHERE pc.project_id = ? AND pc.channel_id = c.id
+        ) AS selected
+       FROM notification_channels c
+       WHERE c.enabled = 1
+       ORDER BY c.type, c.name`,
+    )
+    .all(id) as Array<Record<string, string | number | null>>;
+
+  const notificationDeliveries = database
+    .prepare(
+      `SELECT d.*, c.name AS channel_name, c.type AS channel_type,
+        a.title AS alert_title, l.retailer
+       FROM notification_deliveries d
+       JOIN alerts a ON a.id = d.alert_id
+       JOIN notification_channels c ON c.id = d.channel_id
+       LEFT JOIN listings l ON l.id = a.listing_id
+       WHERE a.project_id = ?
+       ORDER BY d.created_at DESC
+       LIMIT 50`,
+    )
+    .all(id) as Array<Record<string, string | number | null>>;
+
   const snapshots = database
     .prepare(
       `SELECT s.*, l.title, l.retailer
@@ -199,7 +227,16 @@ export function getProject(id: string) {
     )
     .all(id) as Array<Record<string, string | number | null>>;
 
-  return { project, products, listings, rules, snapshots, monitoringRuns };
+  return {
+    project,
+    products,
+    listings,
+    rules,
+    notificationChannels,
+    notificationDeliveries,
+    snapshots,
+    monitoringRuns,
+  };
 }
 
 export function getProjectMonitoringRuns(
@@ -614,18 +651,30 @@ export function getNotificationSettings() {
   const database = getDatabase();
   const channels = database
     .prepare(
-      `SELECT id, name, type, enabled, created_at
-       FROM notification_channels
-       ORDER BY created_at DESC`,
-    )
-    .all() as Array<Record<string, string | number | null>>;
-  const deliveries = database
-    .prepare(
-      `SELECT d.*, c.name AS channel_name
-       FROM notification_deliveries d
-       JOIN notification_channels c ON c.id = d.channel_id
-       ORDER BY d.created_at DESC
-       LIMIT 20`,
+      `SELECT c.id, c.name, c.type, c.enabled, c.created_at,
+        (
+          SELECT d.status
+          FROM notification_deliveries d
+          WHERE d.channel_id = c.id AND d.alert_id IS NULL
+          ORDER BY d.created_at DESC
+          LIMIT 1
+        ) AS last_test_status,
+        (
+          SELECT d.response_code
+          FROM notification_deliveries d
+          WHERE d.channel_id = c.id AND d.alert_id IS NULL
+          ORDER BY d.created_at DESC
+          LIMIT 1
+        ) AS last_test_response_code,
+        (
+          SELECT d.error_message
+          FROM notification_deliveries d
+          WHERE d.channel_id = c.id AND d.alert_id IS NULL
+          ORDER BY d.created_at DESC
+          LIMIT 1
+        ) AS last_test_error
+       FROM notification_channels c
+       ORDER BY c.created_at DESC`,
     )
     .all() as Array<Record<string, string | number | null>>;
   const captures = database
@@ -633,7 +682,7 @@ export function getNotificationSettings() {
       "SELECT * FROM discord_captures ORDER BY created_at DESC LIMIT 5",
     )
     .all() as Array<Record<string, string>>;
-  return { channels, deliveries, captures };
+  return { channels, captures };
 }
 
 export function getLearningSettings() {
@@ -644,4 +693,25 @@ export function getLearningSettings() {
        FROM learning_settings WHERE id = 'default'`,
     )
     .get() as Record<string, string>;
+}
+
+export function getCartAutomationSettings() {
+  const database = getDatabase();
+  const settings = database
+    .prepare(
+      `SELECT chrome_profile_name, updated_at
+       FROM cart_automation_settings WHERE id = 'default'`,
+    )
+    .get() as Record<string, string | null>;
+  const actions = database
+    .prepare(
+      `SELECT a.*, l.title AS listing_title, pr.canonical_name AS product_name
+       FROM cart_actions a
+       JOIN listings l ON l.id = a.listing_id
+       JOIN products pr ON pr.id = l.product_id
+       ORDER BY a.created_at DESC
+       LIMIT 10`,
+    )
+    .all() as Array<Record<string, string | number | null>>;
+  return { settings, actions };
 }

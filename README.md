@@ -24,7 +24,8 @@ Pokémon Center, Best Buy, and Target.
 - Project defaults, retailer guardrails, and listing overrides.
 - Actionable alert policies for in-stock, preorder, backorder, and limited
   ordering opportunities.
-- Discord webhook notifications stored encrypted at rest.
+- System-managed Discord webhooks stored encrypted at rest and selected per
+  project.
 - Dual-model monitor learning from DOM and screenshot evidence.
 - Versioned deterministic recipes, generated tests, retailer memory, and
   user-triggered relearning.
@@ -135,6 +136,8 @@ Set `DEALHUNTER_DATA_DIR` to use another location.
 - Authoritative actionable candidates require a fresh second observation.
 - Rules alert only on confirmed false-to-true transitions.
 - Transition keys prevent duplicate alerts.
+- Projects explicitly select which configured notification destinations receive
+  their alerts, and delivery history is scoped to the originating project.
 - Challenge pages produce a challenged or quarantined state rather than a
   fabricated availability result.
 - The application does not implement CAPTCHA solving, stealth fingerprinting,
