@@ -170,8 +170,8 @@ async function targetCartItemCount(page: Page): Promise<number | null> {
 
 async function addTargetItemToCart(productUrl: string): Promise<void> {
   const session = await openChromeSession();
+  const page = await session.context.newPage();
   try {
-    const page = session.context.pages()[0] ?? (await session.context.newPage());
     const response = await page.goto(productUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60_000,
@@ -250,6 +250,7 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       });
     }
   } finally {
+    if (!page.isClosed()) await page.close();
     await session.close();
   }
 }
