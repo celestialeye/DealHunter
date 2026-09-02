@@ -168,6 +168,26 @@ async function targetCartItemCount(page: Page): Promise<number | null> {
   return match ? Number(match[1]) : null;
 }
 
+function targetProductId(productUrl: string): string {
+  const match = new URL(productUrl).pathname.match(/\/-\/(A-\d+)\/?$/);
+  if (!match) {
+    throw new Error("Target product URL does not contain a product ID.");
+  }
+  return match[1];
+}
+
+async function cartContainsTargetProduct(
+  page: Page,
+  productId: string,
+): Promise<boolean> {
+  await page.goto("https://www.target.com/cart", {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await page.waitForTimeout(5_000);
+  return (await page.locator(`a[href*="${productId}"]`).count()) > 0;
+}
+
 async function addTargetItemToCart(productUrl: string): Promise<void> {
   const session = await openChromeSession();
   const page = await session.context.newPage();
@@ -204,6 +224,7 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
     }
 
     const cartCountBefore = await targetCartItemCount(page);
+    const productId = targetProductId(productUrl);
 
     try {
       await addToCartButton.click({ timeout: 5_000 });
@@ -219,17 +240,25 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
     }
 
     if (cartCountBefore !== null) {
-      await page.waitForFunction(
-        (previousCount) => {
-          const label = document
-            .querySelector('a[data-test="@web/CartLink"]')
-            ?.getAttribute("aria-label");
-          const match = label?.match(/^cart\s+(\d+)\s+items?$/i);
-          return match ? Number(match[1]) === previousCount + 1 : false;
-        },
-        cartCountBefore,
-        { timeout: 20_000 },
-      );
+      try {
+        await page.waitForFunction(
+          (previousCount) => {
+            const label = document
+              .querySelector('a[data-test="@web/CartLink"]')
+              ?.getAttribute("aria-label");
+            const match = label?.match(/^cart\s+(\d+)\s+items?$/i);
+            return match ? Number(match[1]) === previousCount + 1 : false;
+          },
+          cartCountBefore,
+          { timeout: 20_000 },
+        );
+      } catch {
+        if (!(await cartContainsTargetProduct(page, productId))) {
+          throw new Error(
+            "Target did not add the product or increase the cart count.",
+          );
+        }
+      }
     } else {
       await Promise.any([
         page
