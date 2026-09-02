@@ -26,6 +26,11 @@ interface BrowserSession {
   close: () => Promise<void>;
 }
 
+interface TargetCartState {
+  itemCount: number | null;
+  containsProduct: boolean;
+}
+
 function requiredEnvironmentVariable(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -116,6 +121,17 @@ async function openChromeSession(): Promise<BrowserSession> {
       throw new Error("Chrome CDP connection has no browser context.");
     }
 
+    const existingProbePage = context.pages()[0];
+    const probePage = existingProbePage ?? (await context.newPage());
+    const userAgent = await probePage.evaluate(() => navigator.userAgent);
+    if (!existingProbePage) await probePage.close();
+    if (/\bEdg\//i.test(userAgent) || /\bHeadlessChrome\//i.test(userAgent)) {
+      await browser.close();
+      throw new Error(
+        "TARGET_CHROME_CDP_URL must point to a headed Google Chrome profile, not Edge or a headless test browser.",
+      );
+    }
+
     return {
       context,
       close: () => browser.close(),
@@ -176,16 +192,23 @@ function targetProductId(productUrl: string): string {
   return match[1];
 }
 
-async function cartContainsTargetProduct(
+async function readTargetCartState(
   page: Page,
   productId: string,
-): Promise<boolean> {
+): Promise<TargetCartState> {
   await page.goto("https://www.target.com/cart", {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
   });
   await page.waitForTimeout(5_000);
-  return (await page.locator(`a[href*="${productId}"]`).count()) > 0;
+  const cartItems = page.locator(
+    '[data-test="cartItem"], [data-test^="cartItem-"], [data-test*="CartItem"]',
+  );
+  return {
+    itemCount: await targetCartItemCount(page),
+    containsProduct:
+      (await cartItems.locator(`a[href*="${productId}"]`).count()) > 0,
+  };
 }
 
 async function addTargetItemToCart(productUrl: string): Promise<void> {
@@ -244,44 +267,15 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       });
     }
 
-    if (cartCountBefore !== null) {
-      try {
-        await page.waitForFunction(
-          (previousCount) => {
-            const label = document
-              .querySelector('a[data-test="@web/CartLink"]')
-              ?.getAttribute("aria-label");
-            const match = label?.match(/^cart\s+(\d+)\s+items?$/i);
-            return match ? Number(match[1]) === previousCount + 1 : false;
-          },
-          cartCountBefore,
-          { timeout: 20_000 },
-        );
-      } catch {
-        if (!(await cartContainsTargetProduct(page, productId))) {
-          throw new Error(
-            "Target did not add the product or increase the cart count.",
-          );
-        }
-      }
-    } else {
-      await Promise.any([
-        page
-          .getByText(/added to cart/i)
-          .first()
-          .waitFor({ state: "visible", timeout: 20_000 }),
-        page
-          .getByRole("link", { name: /view cart/i })
-          .first()
-          .waitFor({ state: "visible", timeout: 20_000 }),
-        page
-          .getByRole("button", { name: /view cart/i })
-          .first()
-          .waitFor({ state: "visible", timeout: 20_000 }),
-        page.waitForURL(/\/cart(?:[/?#]|$)/, { timeout: 20_000 }),
-      ]).catch(() => {
-        throw new Error("Target did not confirm that the item was added.");
-      });
+    const cartState = await readTargetCartState(page, productId);
+    if (
+      !cartState.containsProduct ||
+      (cartCountBefore !== null &&
+        cartState.itemCount !== cartCountBefore + 1)
+    ) {
+      throw new Error(
+        "Target cart does not contain the approved product with a one-item count increase.",
+      );
     }
   } finally {
     if (!page.isClosed()) await page.close();

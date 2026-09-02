@@ -26,6 +26,10 @@ for example:
 http://127.0.0.1:9222
 ```
 
+The endpoint must belong to a headed Google Chrome instance using the intended
+profile. The executor rejects Microsoft Edge and headless test-browser
+endpoints.
+
 If that variable is not set, the runner launches installed Chrome with a
 persistent profile. Chrome must be closed before execution. The defaults are:
 
