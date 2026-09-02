@@ -204,18 +204,19 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
     }
 
     const cartCountBefore = await targetCartItemCount(page);
-    const targetErrorDialogVisible = await page
+    const targetErrorDialogClose = page
       .locator("[data-floating-ui-portal]")
       .filter({ hasText: "Something went wrong" })
       .first()
       .locator('button[aria-label="close"]')
-      .first()
-      .isVisible();
+      .first();
 
-    await addToCartButton.click({
-      force: targetErrorDialogVisible,
-      timeout: 10_000,
-    });
+    try {
+      await addToCartButton.click({ timeout: 5_000 });
+    } catch (error) {
+      if (!(await targetErrorDialogClose.isVisible())) throw error;
+      await addToCartButton.click({ force: true, timeout: 5_000 });
+    }
 
     if (cartCountBefore !== null) {
       await page.waitForFunction(
