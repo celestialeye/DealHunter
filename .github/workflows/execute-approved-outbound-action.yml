@@ -40,9 +40,7 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_CHROME_CDP_URL: ${{ vars.TARGET_CHROME_CDP_URL }}
-          TARGET_CHROME_PROFILE: ${{ vars.TARGET_CHROME_PROFILE }}
-          TARGET_CHROME_USER_DATA_DIR: ${{ vars.TARGET_CHROME_USER_DATA_DIR }}
+          DEALHUNTER_CHROME_PROFILE_NAME: ${{ vars.DEALHUNTER_CHROME_PROFILE_NAME }}
         run: >-
           npm run outbound:execute --
           --issue-number "${{ github.event.issue.number || inputs.issue_number }}"

@@ -1,13 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-
-import {
-  chromium,
-  type BrowserContext,
-  type Locator,
-  type Page,
-} from "playwright";
-
+import { cartProductKey } from "../src/lib/cart-actions";
+import { executeCartAction } from "../src/lib/cart-executor";
 import {
   isApprovedOutboundAction,
   parseOutboundActionIssue,
@@ -15,20 +7,8 @@ import {
 
 interface GitHubIssue {
   body: string | null;
-  html_url: string;
   labels: Array<string | { name?: string }>;
   state: "open" | "closed";
-  title: string;
-}
-
-interface BrowserSession {
-  context: BrowserContext;
-  close: () => Promise<void>;
-}
-
-interface TargetCartState {
-  itemCount: number | null;
-  containsProduct: boolean;
 }
 
 function requiredEnvironmentVariable(name: string): string {
@@ -43,11 +23,9 @@ function issueNumberFromArguments(): number {
   const index = process.argv.indexOf("--issue-number");
   const value = index >= 0 ? process.argv[index + 1] : undefined;
   const issueNumber = Number(value);
-
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
     throw new Error("Pass a positive issue number with --issue-number.");
   }
-
   return issueNumber;
 }
 
@@ -69,17 +47,14 @@ async function githubRequest<T>(
       },
     },
   );
-
   if (!response.ok) {
     throw new Error(
       `GitHub API ${init.method ?? "GET"} ${endpoint} failed with ${response.status}.`,
     );
   }
-
   if (response.status === 204) {
     return undefined as T;
   }
-
   return (await response.json()) as T;
 }
 
@@ -94,221 +69,46 @@ async function addIssueComment(
   repository: string,
   issueNumber: number,
   body: string,
-): Promise<void> {
+) {
   await githubRequest(repository, `/issues/${issueNumber}/comments`, {
     method: "POST",
     body: JSON.stringify({ body }),
   });
 }
 
-async function closeIssue(
-  repository: string,
-  issueNumber: number,
-): Promise<void> {
-  await githubRequest(repository, `/issues/${issueNumber}`, {
-    method: "PATCH",
-    body: JSON.stringify({ state: "closed" }),
-  });
-}
-
-async function openChromeSession(): Promise<BrowserSession> {
-  const cdpUrl = process.env.TARGET_CHROME_CDP_URL?.trim();
-  if (cdpUrl) {
-    const browser = await chromium.connectOverCDP(cdpUrl);
-    const context = browser.contexts()[0];
-    if (!context) {
-      await browser.close();
-      throw new Error("Chrome CDP connection has no browser context.");
-    }
-
-    const existingProbePage = context.pages()[0];
-    const probePage = existingProbePage ?? (await context.newPage());
-    const userAgent = await probePage.evaluate(() => navigator.userAgent);
-    if (!existingProbePage) await probePage.close();
-    if (/\bEdg\//i.test(userAgent) || /\bHeadlessChrome\//i.test(userAgent)) {
-      await browser.close();
-      throw new Error(
-        "TARGET_CHROME_CDP_URL must point to a headed Google Chrome profile, not Edge or a headless test browser.",
-      );
-    }
-
-    return {
-      context,
-      close: () => browser.close(),
-    };
-  }
-
-  const localAppData = requiredEnvironmentVariable("LOCALAPPDATA");
-  const userDataDirectory =
-    process.env.TARGET_CHROME_USER_DATA_DIR?.trim() ||
-    path.join(localAppData, "Google", "Chrome", "User Data");
-  const profileDirectory =
-    process.env.TARGET_CHROME_PROFILE?.trim() || "Default";
-
-  if (!fs.existsSync(userDataDirectory)) {
-    throw new Error(
-      `Chrome user data directory does not exist: ${userDataDirectory}.`,
-    );
-  }
-
-  const context = await chromium.launchPersistentContext(userDataDirectory, {
-    args: [`--profile-directory=${profileDirectory}`],
-    channel: "chrome",
-    headless: false,
-    viewport: null,
-  });
-
-  return {
-    context,
-    close: () => context.close(),
-  };
-}
-
-async function firstVisibleEnabled(locator: Locator): Promise<Locator | null> {
-  const count = await locator.count();
-  for (let index = 0; index < count; index += 1) {
-    const candidate = locator.nth(index);
-    if ((await candidate.isVisible()) && (await candidate.isEnabled())) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-async function targetCartItemCount(page: Page): Promise<number | null> {
-  const label = await page
-    .locator('a[data-test="@web/CartLink"]')
-    .first()
-    .getAttribute("aria-label");
-  const match = label?.match(/^cart\s+(\d+)\s+items?$/i);
-  return match ? Number(match[1]) : null;
-}
-
-function targetProductId(productUrl: string): string {
-  const match = new URL(productUrl).pathname.match(/\/-\/(A-\d+)\/?$/);
-  if (!match) {
-    throw new Error("Target product URL does not contain a product ID.");
-  }
-  return match[1];
-}
-
-async function readTargetCartState(
-  page: Page,
-  productId: string,
-): Promise<TargetCartState> {
-  await page.goto("https://www.target.com/cart", {
-    waitUntil: "domcontentloaded",
-    timeout: 60_000,
-  });
-  await page.waitForTimeout(5_000);
-  const cartItems = page.locator(
-    '[data-test="cartItem"], [data-test^="cartItem-"], [data-test*="CartItem"]',
-  );
-  return {
-    itemCount: await targetCartItemCount(page),
-    containsProduct:
-      (await cartItems.locator(`a[href*="${productId}"]`).count()) > 0,
-  };
-}
-
-async function addTargetItemToCart(productUrl: string): Promise<void> {
-  const session = await openChromeSession();
-  const page = await session.context.newPage();
-  try {
-    const response = await page.goto(productUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000,
-    });
-
-    if (!response || response.status() === 403 || response.status() === 429) {
-      throw new Error(
-        `Target returned HTTP ${response?.status() ?? "unknown"}.`,
-      );
-    }
-
-    await page.locator("h1").first().waitFor({
-      state: "visible",
-      timeout: 30_000,
-    });
-
-    const addToCartButtons = page.locator(
-      'button[data-test="shippingButton"]',
-      {
-        hasText: "Add to cart",
-      },
-    );
-    await addToCartButtons.first().waitFor({
-      state: "visible",
-      timeout: 30_000,
-    });
-    const addToCartButton = await firstVisibleEnabled(addToCartButtons);
-    if (!addToCartButton) {
-      throw new Error("Target did not present an enabled Add to cart button.");
-    }
-
-    const cartCountBefore = await targetCartItemCount(page);
-    const productId = targetProductId(productUrl);
-
-    try {
-      await addToCartButton.click({ timeout: 5_000 });
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !error.message.includes("styles_overlay__") ||
-        !error.message.includes("intercepts pointer events")
-      ) {
-        throw error;
-      }
-      await addToCartButton.evaluate((element) => {
-        if (!(element instanceof HTMLButtonElement) || element.disabled) {
-          throw new Error("Target cart control is not an enabled button.");
-        }
-        element.click();
-      });
-    }
-
-    const cartState = await readTargetCartState(page, productId);
-    if (
-      !cartState.containsProduct ||
-      (cartCountBefore !== null &&
-        cartState.itemCount !== cartCountBefore + 1)
-    ) {
-      throw new Error(
-        "Target cart does not contain the approved product with a one-item count increase.",
-      );
-    }
-  } finally {
-    if (!page.isClosed()) await page.close();
-    await session.close();
-  }
-}
-
-async function main(): Promise<void> {
+async function main() {
   const repository = requiredEnvironmentVariable("GITHUB_REPOSITORY");
   const issueNumber = issueNumberFromArguments();
   const issue = await githubRequest<GitHubIssue>(
     repository,
     `/issues/${issueNumber}`,
   );
-
   if (issue.state !== "open") {
     throw new Error(`Issue #${issueNumber} is not open.`);
   }
-
   if (!isApprovedOutboundAction(issueLabelNames(issue))) {
     throw new Error(`Issue #${issueNumber} is not approved.`);
   }
 
   const action = parseOutboundActionIssue(issue.body ?? "");
-
   try {
-    await addTargetItemToCart(action.productUrl);
+    const result = await executeCartAction({
+      productUrl: action.productUrl,
+      productKey: cartProductKey("retailer-target", action.productUrl),
+      retailerId: "retailer-target",
+      profileName: requiredEnvironmentVariable(
+        "DEALHUNTER_CHROME_PROFILE_NAME",
+      ),
+    });
     await addIssueComment(
       repository,
       issueNumber,
-      "Outbound action completed: one Target item was added to the shopping cart. No checkout or purchase was attempted.",
+      `Outbound action completed: exact product quantity ${result.baselineProductQuantity} → ${result.finalProductQuantity}, total cart units ${result.baselineCartUnits} → ${result.finalCartUnits}. No checkout or purchase was attempted.`,
     );
-    await closeIssue(repository, issueNumber);
+    await githubRequest(repository, `/issues/${issueNumber}`, {
+      method: "PATCH",
+      body: JSON.stringify({ state: "closed" }),
+    });
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : "Unknown execution error.";
