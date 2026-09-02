@@ -236,7 +236,12 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       ) {
         throw error;
       }
-      await addToCartButton.click({ force: true, timeout: 5_000 });
+      await addToCartButton.evaluate((element) => {
+        if (!(element instanceof HTMLButtonElement) || element.disabled) {
+          throw new Error("Target cart control is not an enabled button.");
+        }
+        element.click();
+      });
     }
 
     if (cartCountBefore !== null) {
