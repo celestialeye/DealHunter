@@ -175,7 +175,9 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
     });
 
     const addToCartButton = await firstVisibleEnabled(
-      page.getByRole("button", { name: "Add to cart", exact: true }),
+      page.locator('button[data-test="shippingButton"]', {
+        hasText: "Add to cart",
+      }),
     );
     if (!addToCartButton) {
       throw new Error("Target did not present an enabled Add to cart button.");
