@@ -205,8 +205,10 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
 
     const cartCountBefore = await targetCartItemCount(page);
     const targetErrorDialogVisible = await page
-      .getByRole("dialog")
+      .locator("[data-floating-ui-portal]")
       .filter({ hasText: "Something went wrong" })
+      .first()
+      .locator('button[aria-label="close"]')
       .first()
       .isVisible();
 
