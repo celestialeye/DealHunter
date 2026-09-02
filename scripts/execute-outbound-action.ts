@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { chromium, type BrowserContext, type Locator } from "playwright";
+import {
+  chromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "playwright";
 
 import {
   isApprovedOutboundAction,
@@ -154,6 +159,20 @@ async function firstVisibleEnabled(locator: Locator): Promise<Locator | null> {
   return null;
 }
 
+async function dismissTargetErrorDialog(page: Page): Promise<boolean> {
+  const errorDialog = page
+    .getByRole("dialog")
+    .filter({ hasText: "Something went wrong" })
+    .first();
+  if (!(await errorDialog.isVisible())) return false;
+
+  await errorDialog
+    .getByRole("button", { name: "close", exact: true })
+    .click();
+  await errorDialog.waitFor({ state: "hidden", timeout: 10_000 });
+  return true;
+}
+
 async function addTargetItemToCart(productUrl: string): Promise<void> {
   const session = await openChromeSession();
   try {
@@ -174,17 +193,6 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       timeout: 30_000,
     });
 
-    const errorDialog = page
-      .getByRole("dialog")
-      .filter({ hasText: "Something went wrong" })
-      .first();
-    if (await errorDialog.isVisible()) {
-      await errorDialog
-        .getByRole("button", { name: "close", exact: true })
-        .click();
-      await errorDialog.waitFor({ state: "hidden", timeout: 10_000 });
-    }
-
     const addToCartButtons = page.locator(
       'button[data-test="shippingButton"]',
       {
@@ -200,7 +208,19 @@ async function addTargetItemToCart(productUrl: string): Promise<void> {
       throw new Error("Target did not present an enabled Add to cart button.");
     }
 
-    await addToCartButton.click();
+    let clicked = false;
+    for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {
+      await dismissTargetErrorDialog(page);
+      try {
+        await addToCartButton.click({ timeout: 10_000 });
+        clicked = true;
+      } catch (error) {
+        if (!(await dismissTargetErrorDialog(page))) throw error;
+      }
+    }
+    if (!clicked) {
+      throw new Error("Target's error dialog repeatedly blocked the cart.");
+    }
 
     await Promise.any([
       page
