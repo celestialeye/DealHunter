@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "dealhunter-workflow@dealhunter": true
+  },
+  "extraKnownMarketplaces": {
+    "dealhunter": {
+      "source": {
+        "source": "directory",
+        "path": "."
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "dealhunter",
+  "owner": {
+    "name": "DealHunter contributors"
+  },
+  "metadata": {
+    "description": "Repository-specific Copilot CLI workflows for DealHunter",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "dealhunter-workflow",
+      "description": "Close, validate, commit, push, and open DealHunter work for review",
+      "version": "1.0.0",
+      "source": ".github/copilot-plugins/dealhunter-workflow",
+      "category": "productivity"
+    }
+  ]
+}

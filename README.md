@@ -79,6 +79,17 @@ npm run images:mine -- pokemon-30th-celebration
 npm run recipes:learn -- pokemon-30th-celebration
 ```
 
+## Repository workflow
+
+DealHunter provides a repository-local `/dealhunter-workflow:shipit` command
+for Copilot CLI. The command reviews the accumulated task, runs the offline
+merge gate and relevant end-to-end tests, creates focused Conventional
+Commits, pushes a branch, and opens or updates a pull request without merging
+it automatically.
+
+The workflow is enabled only when Copilot CLI runs from this repository.
+Restart the CLI after pulling changes to `.github/copilot/settings.json`.
+
 ## Monitor learning
 
 Initial URL learning and explicit relearning capture:
