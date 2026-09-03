@@ -186,6 +186,15 @@ export async function addProductAction(formData: FormData) {
 export async function addProductFromUrlAction(formData: FormData) {
   const projectId = text(formData, "projectId");
   const sourceUrl = new URL(text(formData, "url"));
+  const selectionMode = z
+    .enum([
+      "EXACT",
+      "CUSTOMER_CHOICE",
+      "RANDOM_VARIANT",
+      "ASSORTMENT",
+      "UNKNOWN",
+    ])
+    .parse(text(formData, "selectionMode") || "UNKNOWN");
   const normalizedUrl = sourceUrl.toString().toLowerCase().replace(/\/$/, "");
   const existing = getDatabase()
     .prepare("SELECT product_id FROM listings WHERE normalized_url = ?")
@@ -242,10 +251,11 @@ export async function addProductFromUrlAction(formData: FormData) {
         `INSERT INTO listings
          (id, product_id, retailer_id, retailer, retailer_sku, title, url,
           normalized_url, current_price_cents, current_availability,
-          current_availability_text, selection_mode, interval_seconds,
-          schedule_mode, schedule_reason, last_observed_at, next_run_at,
-          observation_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EXACT', 60, 'INHERIT', ?, ?, ?, 1, ?)`,
+          current_availability_text, selection_mode,
+          selection_mode_confirmed_at, interval_seconds, schedule_mode,
+          schedule_reason, last_observed_at, next_run_at, observation_count,
+          created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 60, 'INHERIT', ?, ?, ?, 1, ?)`,
       )
       .run(
         listingId,
@@ -259,6 +269,8 @@ export async function addProductFromUrlAction(formData: FormData) {
         crawled.priceCents,
         crawled.availability,
         formatAvailability(crawled.availability),
+        selectionMode,
+        selectionMode === "EXACT" ? now : null,
         initialSchedule.reason,
         now,
         nextRun,
@@ -333,8 +345,9 @@ export async function addListingAction(formData: FormData) {
       `INSERT INTO listings
        (id, product_id, retailer_id, retailer, title, url, normalized_url,
         current_price_cents, current_availability, selection_mode,
-        schedule_mode, interval_seconds, schedule_reason, next_run_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', ?, 'INHERIT', ?, ?, ?, ?)`,
+        selection_mode_confirmed_at, schedule_mode, interval_seconds,
+        schedule_reason, next_run_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', ?, ?, 'INHERIT', ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -345,7 +358,8 @@ export async function addListingAction(formData: FormData) {
       url.toString(),
       url.toString().toLowerCase().replace(/\/$/, ""),
       optionalMoney(text(formData, "price")),
-      text(formData, "selectionMode") || "EXACT",
+      text(formData, "selectionMode") || "UNKNOWN",
+      text(formData, "selectionMode") === "EXACT" ? now : null,
       Math.max(60, Number(text(formData, "interval") || "60")),
       initialSchedule.reason,
       new Date(

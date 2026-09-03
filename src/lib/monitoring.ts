@@ -573,30 +573,45 @@ async function observeRetailerWithBrowser(
           const disabled =
             element.hasAttribute("disabled") ||
             element.getAttribute("aria-disabled") === "true";
-          const identityValues: string[] = [];
-          const associatedLinks: string[] = [];
+          const scopes: Array<{
+            identityValues: string[];
+            associatedLinks: string[];
+            purchaseControlCount: number;
+          }> = [];
           let container: HTMLElement | null = element;
-          for (let depth = 0; depth < 7 && container; depth += 1) {
-            identityValues.push(
-              ...[
+          for (let depth = 0; depth < 5 && container; depth += 1) {
+            const identityValues = [
               container.id,
               container.getAttribute("data-sku-id"),
               container.getAttribute("data-product-id"),
               container.getAttribute("data-tcin"),
-              ].filter((value): value is string => Boolean(value)),
-            );
-            associatedLinks.push(
-              ...Array.from(
+            ].filter((value): value is string => Boolean(value));
+            const associatedLinks = Array.from(
               container.querySelectorAll<HTMLAnchorElement>("a[href]"),
-              ).map((link) => link.href),
-            );
+            ).map((link) => link.href);
+            const purchaseControlCount = Array.from(
+              container.querySelectorAll<HTMLElement>(
+                'button, [role="button"], input[type="submit"], input[type="button"]',
+              ),
+            ).filter((control) =>
+              /\b(add to cart|add to bag|pre-?order)\b/i.test(
+                control.getAttribute("aria-label") ||
+                  control.getAttribute("value") ||
+                  control.innerText ||
+                  "",
+              ),
+            ).length;
+            scopes.push({
+              identityValues,
+              associatedLinks,
+              purchaseControlCount,
+            });
             container = container.parentElement;
           }
           return {
             name,
             disabled,
-            identityValues,
-            associatedLinks,
+            scopes,
             top: box.top,
             width: box.width,
             height: box.height,
@@ -619,17 +634,28 @@ async function observeRetailerWithBrowser(
     const control =
       result.candidates.find(
         (candidate) =>
-          candidate.identityValues.some((value) =>
-            productIdentityTokenMatches(value, productKey),
-          ) ||
-          candidate.associatedLinks.some((link) => {
-            try {
-              return (
-                cartProductKey(listing.retailer_id ?? "", link) === productKey
-              );
-            } catch {
-              return false;
-            }
+          candidate.scopes.some((scope) => {
+            const identityMatches = scope.identityValues.some((value) =>
+              productIdentityTokenMatches(value, productKey),
+            );
+            const associatedProductKeys = new Set(
+              scope.associatedLinks.flatMap((link) => {
+                try {
+                  return [
+                    cartProductKey(listing.retailer_id ?? "", link),
+                  ];
+                } catch {
+                  return [];
+                }
+              }),
+            );
+            const linkMatches =
+              associatedProductKeys.size === 1 &&
+              associatedProductKeys.has(productKey);
+            return (
+              scope.purchaseControlCount === 1 &&
+              (identityMatches || linkMatches)
+            );
           }),
       ) ?? null;
 

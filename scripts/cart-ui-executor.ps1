@@ -62,9 +62,23 @@ public static class DealHunterWindows {
   [DllImport("user32.dll")]
   public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 
+  [DllImport("user32.dll")]
+  public static extern IntPtr WindowFromPoint(POINT point);
+
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+  [DllImport("user32.dll")]
+  public static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+
   public struct POINT {
     public int X;
     public int Y;
+  }
+
+  public struct LASTINPUTINFO {
+    public uint cbSize;
+    public uint dwTime;
   }
 }
 "@ | Out-Null
@@ -74,6 +88,7 @@ $script:WmClose = 0x0010
 $script:SwRestore = 9
 $script:MouseLeftDown = 0x0002
 $script:MouseLeftUp = 0x0004
+$script:GaRoot = 2
 $script:ProfileDirectory = $null
 
 function Get-ChromeProfileDirectory {
@@ -202,6 +217,21 @@ function Assert-ActionApproved {
     -not (Test-Path -LiteralPath $ApprovalFilePath -PathType Leaf)
   ) {
     throw "Product auto-add approval was revoked before execution."
+  }
+  if ($ApprovalFilePath) {
+    try {
+      $approval = Get-Content -LiteralPath $ApprovalFilePath -Raw |
+        ConvertFrom-Json
+      if (
+        -not $approval.expiresAt -or
+        [DateTime]::Parse($approval.expiresAt).ToUniversalTime() -le
+          [DateTime]::UtcNow
+      ) {
+        throw "Product auto-add approval expired before execution."
+      }
+    } catch {
+      throw "Product auto-add approval is invalid or expired."
+    }
   }
   if ([DateTime]::UtcNow.AddSeconds(30) -ge $script:Deadline) {
     throw "Insufficient time remains to add and reconcile the cart safely."
@@ -437,6 +467,26 @@ function Get-RuntimeKey {
   return ($Element.GetRuntimeId() -join ".")
 }
 
+function Test-PointTargetsElement {
+  param(
+    [System.Windows.Automation.AutomationElement]$ExpectedElement,
+    [DealHunterWindows+POINT]$Point
+  )
+
+  $expectedRuntimeKey = Get-RuntimeKey $ExpectedElement
+  $candidate = [System.Windows.Automation.AutomationElement]::FromPoint(
+    [System.Windows.Point]::new($Point.X, $Point.Y)
+  )
+  $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+  for ($depth = 0; $depth -lt 12 -and $candidate; $depth += 1) {
+    if ((Get-RuntimeKey $candidate) -eq $expectedRuntimeKey) {
+      return $true
+    }
+    $candidate = $walker.GetParent($candidate)
+  }
+  return $false
+}
+
 function Convert-Quantity {
   param([System.Windows.Automation.AutomationElement]$QuantityControl)
 
@@ -515,6 +565,8 @@ function Read-CartSnapshot {
   return [pscustomobject]@{
     ProductQuantity = $productQuantity
     TotalUnits = $totalUnits
+    ParsedLineCount = $lines.Count
+    QuantityControlCount = $quantityControls.Count
   }
 }
 
@@ -545,21 +597,49 @@ function Wait-ForCartSnapshot {
     }
 
     $snapshot = Read-CartSnapshot $Window
-    $headerCount = $null
-    $cartLinks = Get-DescendantsByControlType $Window (
-      [System.Windows.Automation.ControlType]::Hyperlink
-    )
-    foreach ($cartLink in $cartLinks) {
-      $match = [regex]::Match(
-        $cartLink.Current.Name,
-        "(?i)^cart\s+(\d+)\s+items?$"
-      )
-      if ($match.Success) {
-        $headerCount = [int]$match.Groups[1].Value
-        break
-      }
+    if ($snapshot.ParsedLineCount -ne $snapshot.QuantityControlCount) {
+      $stability.Previous = $null
+      $stability.Samples = 0
+      return $null
     }
-    if ($null -ne $headerCount -and $snapshot.TotalUnits -ne $headerCount) {
+    $headerCount = $null
+    $emptyCart = $false
+    foreach ($controlType in @(
+      [System.Windows.Automation.ControlType]::Hyperlink,
+      [System.Windows.Automation.ControlType]::Button,
+      [System.Windows.Automation.ControlType]::Text
+    )) {
+      foreach ($control in (
+        Get-DescendantsByControlType $Window $controlType
+      )) {
+        $name = $control.Current.Name
+        $match = [regex]::Match(
+          $name,
+          "(?i)(?:\bcart\b[^\d]{0,24}(\d+)\s+items?|\b(\d+)\s+items?[^\r\n]{0,24}\bcart\b)"
+        )
+        if ($match.Success) {
+          $headerCount = [int](
+            if ($match.Groups[1].Success) {
+              $match.Groups[1].Value
+            } else {
+              $match.Groups[2].Value
+            }
+          )
+          break
+        }
+        if (
+          $name -match "(?i)(your|shopping)?\s*cart\s+is\s+empty|no\s+items?\s+in\s+(your\s+)?cart"
+        ) {
+          $emptyCart = $true
+        }
+      }
+      if ($null -ne $headerCount) { break }
+    }
+    if (
+      ($null -eq $headerCount -and -not $emptyCart) -or
+      ($null -ne $headerCount -and $snapshot.TotalUnits -ne $headerCount) -or
+      ($emptyCart -and $snapshot.TotalUnits -ne 0)
+    ) {
       $stability.Previous = $null
       $stability.Samples = 0
       return $null
@@ -605,21 +685,37 @@ function Find-PrimaryAddButton {
       }
       $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
       $container = $control
-      for ($depth = 0; $depth -lt 8 -and $container; $depth += 1) {
+      for ($depth = 0; $depth -lt 5 -and $container; $depth += 1) {
+        $purchaseControls = @(
+          Get-DescendantsByControlType $container (
+            [System.Windows.Automation.ControlType]::Button
+          )
+          Get-DescendantsByControlType $container (
+            [System.Windows.Automation.ControlType]::Hyperlink
+          )
+        ) | Where-Object {
+          $_.Current.Name -match "(?i)\b(add to cart|add to bag|pre-?order)\b"
+        }
         $links = Get-DescendantsByControlType $container (
           [System.Windows.Automation.ControlType]::Hyperlink
         )
+        $associatedKeys = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($link in $links) {
           try {
-            if (
+            [void]$associatedKeys.Add(
               (Get-ProductKeyFromUrl $RetailerId (
                 Get-ElementValue $link
-              )) -eq $ProductKey
-            ) {
-              return $control
-            }
+              ))
+            )
           } catch {
           }
+        }
+        if (
+          $purchaseControls.Count -eq 1 -and
+          $associatedKeys.Count -eq 1 -and
+          $associatedKeys.Contains($ProductKey)
+        ) {
+          return $control
         }
         $container = $walker.GetParent($container)
       }
@@ -651,19 +747,105 @@ function Click-Element {
   $cursor = [DealHunterWindows+POINT]::new()
   [void][DealHunterWindows]::GetCursorPos([ref]$cursor)
   $point = $Element.GetClickablePoint()
+  $lastInput = [DealHunterWindows+LASTINPUTINFO]::new()
+  $lastInput.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($lastInput)
+  [void][DealHunterWindows]::GetLastInputInfo([ref]$lastInput)
+  $lastInputTick = $lastInput.dwTime
   try {
     [void][DealHunterWindows]::ShowWindowAsync(
       $WindowHandle,
       $script:SwRestore
     )
-    [void][DealHunterWindows]::SetForegroundWindow($WindowHandle)
+    if (-not [DealHunterWindows]::SetForegroundWindow($WindowHandle)) {
+      throw "Chrome could not acquire the foreground interaction lease."
+    }
     Start-Sleep -Milliseconds 150
-    [void][DealHunterWindows]::SetCursorPos(
+    if ([DealHunterWindows]::GetForegroundWindow() -ne $WindowHandle) {
+      throw "Chrome lost the foreground interaction lease."
+    }
+    [void][DealHunterWindows]::GetLastInputInfo([ref]$lastInput)
+    if ($lastInput.dwTime -ne $lastInputTick) {
+      throw "User input interrupted the cart action."
+    }
+    $hitPoint = [DealHunterWindows+POINT]::new()
+    $hitPoint.X = [int][Math]::Round($point.X)
+    $hitPoint.Y = [int][Math]::Round($point.Y)
+    $hitWindow = [DealHunterWindows]::WindowFromPoint($hitPoint)
+    if (
+      [DealHunterWindows]::GetAncestor(
+        $hitWindow,
+        $script:GaRoot
+      ) -ne $WindowHandle
+    ) {
+      throw "The cart control is not the visible hit target in the dedicated Chrome window."
+    }
+    if (-not [DealHunterWindows]::SetCursorPos(
       [int][Math]::Round($point.X),
       [int][Math]::Round($point.Y)
-    )
+    )) {
+      throw "The cart control pointer could not be positioned."
+    }
+    $actualCursor = [DealHunterWindows+POINT]::new()
+    if (-not [DealHunterWindows]::GetCursorPos([ref]$actualCursor)) {
+      throw "The cart control pointer position could not be verified."
+    }
+    if (
+      [Math]::Abs($actualCursor.X - [int][Math]::Round($point.X)) -gt 1 -or
+      [Math]::Abs($actualCursor.Y - [int][Math]::Round($point.Y)) -gt 1
+    ) {
+      throw "The cart control pointer moved before the click."
+    }
+    if ([DealHunterWindows]::GetForegroundWindow() -ne $WindowHandle) {
+      throw "Chrome lost the foreground interaction lease before the click."
+    }
+    $actualPoint = [DealHunterWindows+POINT]::new()
+    $actualPoint.X = $actualCursor.X
+    $actualPoint.Y = $actualCursor.Y
+    $actualHitWindow = [DealHunterWindows]::WindowFromPoint($actualPoint)
+    if (
+      [DealHunterWindows]::GetAncestor(
+        $actualHitWindow,
+        $script:GaRoot
+      ) -ne $WindowHandle
+    ) {
+      throw "The cart control stopped being the visible hit target."
+    }
+    if (-not (Test-PointTargetsElement $Element $actualPoint)) {
+      throw "The pointer no longer targets the selected cart control."
+    }
+    [void][DealHunterWindows]::GetLastInputInfo([ref]$lastInput)
+    if ($lastInput.dwTime -ne $lastInputTick) {
+      throw "User input interrupted the cart action before the click."
+    }
     if ($RequiresApproval) {
       Assert-ActionApproved
+    }
+    $approvedCursor = [DealHunterWindows+POINT]::new()
+    if (-not [DealHunterWindows]::GetCursorPos([ref]$approvedCursor)) {
+      throw "The cart control pointer could not be reverified."
+    }
+    if (
+      $approvedCursor.X -ne $actualCursor.X -or
+      $approvedCursor.Y -ne $actualCursor.Y -or
+      [DealHunterWindows]::GetForegroundWindow() -ne $WindowHandle
+    ) {
+      throw "The cart action was interrupted during approval validation."
+    }
+    $approvedPoint = [DealHunterWindows+POINT]::new()
+    $approvedPoint.X = $approvedCursor.X
+    $approvedPoint.Y = $approvedCursor.Y
+    if (
+      [DealHunterWindows]::GetAncestor(
+        [DealHunterWindows]::WindowFromPoint($approvedPoint),
+        $script:GaRoot
+      ) -ne $WindowHandle -or
+      -not (Test-PointTargetsElement $Element $approvedPoint)
+    ) {
+      throw "The selected cart control changed during approval validation."
+    }
+    [void][DealHunterWindows]::GetLastInputInfo([ref]$lastInput)
+    if ($lastInput.dwTime -ne $lastInputTick) {
+      throw "User input interrupted the final cart click."
     }
     [DealHunterWindows]::mouse_event(
       $script:MouseLeftDown,

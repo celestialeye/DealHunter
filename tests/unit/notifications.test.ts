@@ -20,6 +20,7 @@ describe("buildDiscordPayload", () => {
         current_availability: "IN_STOCK",
         current_availability_text: "In Stock",
         selection_mode: "EXACT",
+        selection_mode_confirmed_at: new Date(0).toISOString(),
         interval_seconds: 60,
         schedule_mode: "SYSTEM",
         interval_min_seconds: 60,

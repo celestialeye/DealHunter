@@ -133,6 +133,8 @@ export function isEligibleCartConfirmation(
   if (
     !listing.retailer_id ||
     !listing.retailer_id.startsWith("retailer-") ||
+    listing.selection_mode !== "EXACT" ||
+    !listing.selection_mode_confirmed_at ||
     !confirmation.freshlyConfirmedActionable ||
     initialObservation.source === "SIMULATION" ||
     finalObservation.source === "SIMULATION" ||
@@ -156,7 +158,8 @@ function productHasCurrentApproval(listing: ListingRecord) {
   return Boolean(
     listing.product_auto_add_to_cart &&
       listing.product_auto_add_terms_version ===
-        CART_AUTOMATION_TERMS_VERSION,
+        CART_AUTOMATION_TERMS_VERSION &&
+      listing.product_auto_add_enabled_at,
   );
 }
 
@@ -421,17 +424,23 @@ export function claimNextCartAction(
     }
     const listing = database
       .prepare(
-        `SELECT pr.auto_add_to_cart, pr.auto_add_terms_version
+        `SELECT pr.auto_add_to_cart, pr.auto_add_terms_version,
+          pr.auto_add_enabled_at
          FROM listings l
          JOIN products pr ON pr.id = l.product_id
          WHERE l.id = ?`,
       )
       .get(action.listing_id) as
-      | { auto_add_to_cart: number; auto_add_terms_version: string | null }
+      | {
+          auto_add_to_cart: number;
+          auto_add_terms_version: string | null;
+          auto_add_enabled_at: string | null;
+        }
       | undefined;
     if (
       !listing?.auto_add_to_cart ||
-      listing.auto_add_terms_version !== CART_AUTOMATION_TERMS_VERSION
+      listing.auto_add_terms_version !== CART_AUTOMATION_TERMS_VERSION ||
+      !listing.auto_add_enabled_at
     ) {
       const skippedAt = nowIso();
       database
@@ -461,7 +470,20 @@ export function claimNextCartAction(
       .run(startedAt, startedAt, action.id);
     approvalPath = cartActionApprovalPath(action.id);
     mkdirSync(path.dirname(approvalPath), { recursive: true });
-    writeFileSync(approvalPath, action.id, { encoding: "utf8", flag: "wx" });
+    const approvalExpiresAt = new Date(
+      Math.min(
+        new Date(action.expires_at).getTime(),
+        Date.now() + 4 * 60_000,
+      ),
+    ).toISOString();
+    writeFileSync(
+      approvalPath,
+      JSON.stringify({
+        token: action.id,
+        expiresAt: approvalExpiresAt,
+      }),
+      { encoding: "utf8", flag: "wx" },
+    );
     database.exec("COMMIT");
     return {
       ...action,

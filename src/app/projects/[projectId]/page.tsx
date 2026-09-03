@@ -1665,6 +1665,26 @@ function SetupView({ projectId }: { projectId: string }) {
             data-testid="url-target-quantity"
           />
         </div>
+        <div className="field">
+          <label htmlFor="url-selection-mode">Listing type</label>
+          <select
+            id="url-selection-mode"
+            name="selectionMode"
+            defaultValue="UNKNOWN"
+            data-testid="url-selection-mode"
+          >
+            <option value="UNKNOWN">Not classified yet</option>
+            <option value="EXACT">Exact product and variant</option>
+            <option value="CUSTOMER_CHOICE">
+              Customer chooses a variant
+            </option>
+            <option value="RANDOM_VARIANT">Random variant</option>
+            <option value="ASSORTMENT">Assortment listing</option>
+          </select>
+          <small>
+            Automatic cart actions require an exact product and variant.
+          </small>
+        </div>
         <button
           className="button button-amber"
           type="submit"

@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { cartProductKey } from "../src/lib/cart-actions";
 import { executeCartAction } from "../src/lib/cart-executor";
 import {
@@ -9,6 +14,7 @@ interface GitHubIssue {
   body: string | null;
   labels: Array<string | { name?: string }>;
   state: "open" | "closed";
+  updated_at: string;
 }
 
 function requiredEnvironmentVariable(name: string): string {
@@ -39,6 +45,7 @@ async function githubRequest<T>(
     `https://api.github.com/repos/${repository}${endpoint}`,
     {
       ...init,
+      signal: init.signal ?? AbortSignal.timeout(5_000),
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
@@ -65,6 +72,25 @@ function issueLabelNames(issue: GitHubIssue): string[] {
   });
 }
 
+function approvedIssueDigest(issue: GitHubIssue) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        body: issue.body ?? "",
+        labels: issueLabelNames(issue).sort(),
+        state: issue.state,
+      }),
+    )
+    .digest("hex");
+}
+
+function isIssueApproved(issue: GitHubIssue) {
+  return (
+    issue.state === "open" &&
+    isApprovedOutboundAction(issueLabelNames(issue))
+  );
+}
+
 async function addIssueComment(
   repository: string,
   issueNumber: number,
@@ -83,14 +109,67 @@ async function main() {
     repository,
     `/issues/${issueNumber}`,
   );
-  if (issue.state !== "open") {
-    throw new Error(`Issue #${issueNumber} is not open.`);
+  const approvedBody = requiredEnvironmentVariable("APPROVED_ISSUE_BODY");
+  const approvedUpdatedAt = requiredEnvironmentVariable(
+    "APPROVED_ISSUE_UPDATED_AT",
+  );
+  const approvalAgeMs =
+    Date.now() - new Date(approvedUpdatedAt).getTime();
+  if (
+    issue.body !== approvedBody ||
+    issue.updated_at !== approvedUpdatedAt ||
+    !Number.isFinite(approvalAgeMs) ||
+    approvalAgeMs < 0 ||
+    approvalAgeMs > 10 * 60_000
+  ) {
+    throw new Error(
+      `Issue #${issueNumber} no longer matches the recent approval event.`,
+    );
   }
-  if (!isApprovedOutboundAction(issueLabelNames(issue))) {
+  if (!isIssueApproved(issue)) {
     throw new Error(`Issue #${issueNumber} is not approved.`);
   }
 
   const action = parseOutboundActionIssue(issue.body ?? "");
+  const approvalDigest = approvedIssueDigest(issue);
+  const approvalDirectory = mkdtempSync(
+    path.join(tmpdir(), "dealhunter-github-approval-"),
+  );
+  const approvalFilePath = path.join(approvalDirectory, "action.approved");
+  writeFileSync(
+    approvalFilePath,
+    JSON.stringify({
+      token: approvalDigest,
+      expiresAt: new Date(Date.now() + 4 * 60_000).toISOString(),
+    }),
+    {
+      encoding: "utf8",
+      flag: "wx",
+    },
+  );
+  let approvalWatcherRunning = true;
+  const approvalWatcher = (async () => {
+    while (approvalWatcherRunning) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (!approvalWatcherRunning) break;
+      try {
+        const currentIssue = await githubRequest<GitHubIssue>(
+          repository,
+          `/issues/${issueNumber}`,
+        );
+        if (
+          !isIssueApproved(currentIssue) ||
+          approvedIssueDigest(currentIssue) !== approvalDigest
+        ) {
+          rmSync(approvalFilePath, { force: true });
+          break;
+        }
+      } catch {
+        rmSync(approvalFilePath, { force: true });
+        break;
+      }
+    }
+  })();
   try {
     const result = await executeCartAction({
       productUrl: action.productUrl,
@@ -99,6 +178,7 @@ async function main() {
       profileName: requiredEnvironmentVariable(
         "DEALHUNTER_CHROME_PROFILE_NAME",
       ),
+      approvalFilePath,
     });
     await addIssueComment(
       repository,
@@ -120,6 +200,10 @@ async function main() {
       `Outbound action failed without attempting checkout: ${detail}`,
     );
     throw error;
+  } finally {
+    approvalWatcherRunning = false;
+    await approvalWatcher;
+    rmSync(approvalDirectory, { recursive: true, force: true });
   }
 }
 

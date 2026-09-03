@@ -52,9 +52,10 @@ The executor opens a dedicated Chrome window in the existing profile, verifies
 the profile name, and closes only that temporary window. It does not use a CDP
 port or a copied browser profile.
 
-## Manual execution
+## Issue-approved execution
 
-Use **Actions > Execute approved outbound action > Run workflow** and provide
-the number of an open issue carrying the `approval:approved` label. Successful
-actions add a completion comment and close the issue. Failures leave the issue
-open and add an error comment.
+Adding `approval:approved` to an open outbound-action issue triggers the
+workflow. The executor binds the action to the issue body and timestamp from
+that label event, rejects stale approvals, and watches for label removal,
+closure, or body edits until the outbound click. Successful actions add a
+completion comment and close the issue. Failures leave it open with an error.

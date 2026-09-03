@@ -121,8 +121,9 @@ export function seedPokemonProject(database: DatabaseSync) {
     `INSERT INTO listings
      (id, product_id, retailer, title, url, normalized_url, current_price_cents,
       current_availability, current_availability_text, selection_mode,
-      schedule_mode, interval_seconds, next_run_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'INHERIT', 60, ?, ?)`,
+      selection_mode_confirmed_at, schedule_mode, interval_seconds,
+      next_run_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'INHERIT', 60, ?, ?)`,
   );
   listings.forEach((listing, index) => {
     const productId = productIds.get(listing.product);
@@ -141,6 +142,7 @@ export function seedPokemonProject(database: DatabaseSync) {
       listing.availability,
       availabilityText(listing.availability),
       listing.mode ?? "EXACT",
+      (listing.mode ?? "EXACT") === "EXACT" ? now : null,
       new Date(Date.parse(now) + initialIntervalSeconds * 1000).toISOString(),
       now,
     );

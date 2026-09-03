@@ -85,7 +85,6 @@ function migrate(database: DatabaseSync) {
       auto_add_enabled_at TEXT,
       created_at TEXT NOT NULL
     );
-
     CREATE TABLE IF NOT EXISTS listings (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -398,12 +397,33 @@ function migrate(database: DatabaseSync) {
   ensureColumn(database, "products", "auto_add_enabled_at", "TEXT");
   database.exec(`
     UPDATE products
-    SET auto_add_terms_version = '2026-09-01',
+    SET auto_add_terms_version = COALESCE(
+          auto_add_terms_version,
+          '2026-09-01'
+        ),
         auto_add_enabled_at = COALESCE(auto_add_enabled_at, created_at)
-    WHERE auto_add_to_cart = 1;
+    WHERE auto_add_to_cart = 1
+      AND auto_add_enabled_at IS NULL;
+
+    CREATE TRIGGER IF NOT EXISTS products_auto_cart_approval_timestamp
+    AFTER INSERT ON products
+    WHEN NEW.auto_add_to_cart = 1 AND NEW.auto_add_enabled_at IS NULL
+    BEGIN
+      UPDATE products
+      SET auto_add_enabled_at = NEW.created_at
+      WHERE id = NEW.id;
+    END;
   `);
   ensureColumn(database, "listings", "retailer_id", "TEXT");
   ensureColumn(database, "listings", "retailer_sku", "TEXT");
+  ensureColumn(database, "listings", "selection_mode_confirmed_at", "TEXT");
+  database.exec(`
+    UPDATE listings
+    SET selection_mode_confirmed_at = created_at
+    WHERE selection_mode = 'EXACT'
+      AND selection_mode_confirmed_at IS NULL
+      AND id LIKE 'pokemon-listing-%';
+  `);
   ensureColumn(
     database,
     "listings",

@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -41,6 +42,7 @@ function listing(overrides: Partial<ListingRecord> = {}): ListingRecord {
     current_availability: "OUT_OF_STOCK",
     current_availability_text: "Out of stock",
     selection_mode: "EXACT",
+    selection_mode_confirmed_at: new Date(0).toISOString(),
     interval_seconds: 60,
     schedule_mode: "SYSTEM",
     interval_min_seconds: 60,
@@ -251,7 +253,8 @@ describe("cart action approval", () => {
         CREATE TABLE products (
           id TEXT PRIMARY KEY,
           auto_add_to_cart INTEGER NOT NULL,
-          auto_add_terms_version TEXT
+          auto_add_terms_version TEXT,
+          auto_add_enabled_at TEXT
         );
         CREATE TABLE listings (
           id TEXT PRIMARY KEY,
@@ -295,7 +298,7 @@ describe("cart action approval", () => {
           completed_at TEXT
         );
         INSERT INTO products VALUES (
-          'product-1', 1, '2026-09-01'
+          'product-1', 1, '2026-09-01', '2026-09-01T00:00:00.000Z'
         );
         INSERT INTO listings VALUES ('listing-1', 'product-1');
         INSERT INTO cart_automation_settings VALUES ('default', 'Peter');
@@ -346,7 +349,16 @@ describe("cart action approval", () => {
     );
 
     expect(claimNextCartAction(database)?.status).toBe("RUNNING");
-    expect(existsSync(cartActionApprovalPath("pending-action"))).toBe(true);
+    const approvalPath = cartActionApprovalPath("pending-action");
+    expect(existsSync(approvalPath)).toBe(true);
+    const approval = JSON.parse(readFileSync(approvalPath, "utf8")) as {
+      token: string;
+      expiresAt: string;
+    };
+    expect(approval.token).toBe("pending-action");
+    expect(new Date(approval.expiresAt).getTime()).toBeLessThanOrEqual(
+      Date.now() + 60_000,
+    );
     database.close();
   });
 
@@ -546,6 +558,39 @@ describe("isEligibleCartConfirmation", () => {
         finalObservation: observation(),
         freshlyConfirmedActionable: false,
       }),
+    ).toBe(false);
+  });
+
+  it("rejects ambiguous listing selection modes", () => {
+    for (const selectionMode of [
+      "CUSTOMER_CHOICE",
+      "RANDOM_VARIANT",
+      "ASSORTMENT",
+      "UNKNOWN",
+    ] as const) {
+      expect(
+        isEligibleCartConfirmation(
+          listing({ selection_mode: selectionMode }),
+          {
+            initialObservation: observation(),
+            finalObservation: observation(),
+            freshlyConfirmedActionable: true,
+          },
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("rejects legacy exact listings without explicit classification", () => {
+    expect(
+      isEligibleCartConfirmation(
+        listing({ selection_mode_confirmed_at: null }),
+        {
+          initialObservation: observation(),
+          finalObservation: observation(),
+          freshlyConfirmedActionable: true,
+        },
+      ),
     ).toBe(false);
   });
 });

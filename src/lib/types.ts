@@ -42,6 +42,7 @@ export interface ListingRecord {
   current_availability: Availability;
   current_availability_text: string | null;
   selection_mode: SelectionMode;
+  selection_mode_confirmed_at: string | null;
   interval_seconds: number;
   schedule_mode: "INHERIT" | "SYSTEM" | "FIXED" | "BOUNDED";
   interval_min_seconds: number;

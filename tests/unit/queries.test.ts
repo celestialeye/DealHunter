@@ -47,4 +47,31 @@ describe("getProject", () => {
 
     expect(data?.project.monitoring_run_count).toBe(101);
   });
+
+  it("records the enabled-by-default product cart approval timestamp", () => {
+    const database = getDatabase();
+    const createdAt = new Date().toISOString();
+    database
+      .prepare(
+        `INSERT INTO products
+         (id, project_id, canonical_name, created_at)
+         VALUES ('default-cart-product', 'pokemon-30th-celebration',
+           'Default cart product', ?)`,
+      )
+      .run(createdAt);
+
+    expect(
+      database
+        .prepare(
+          `SELECT auto_add_to_cart, auto_add_terms_version,
+            auto_add_enabled_at
+           FROM products WHERE id = 'default-cart-product'`,
+        )
+        .get(),
+    ).toEqual({
+      auto_add_to_cart: 1,
+      auto_add_terms_version: "2026-09-01",
+      auto_add_enabled_at: createdAt,
+    });
+  });
 });

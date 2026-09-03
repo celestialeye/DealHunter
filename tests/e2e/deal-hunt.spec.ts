@@ -118,6 +118,7 @@ test("creates and monitors a deal hunt end to end", async ({ page }) => {
   fixtureUrl.searchParams.set("price", "14.99");
   await page.getByTestId("url-product-url").fill(fixtureUrl.toString());
   await page.getByTestId("url-target-quantity").fill("2");
+  await page.getByTestId("url-selection-mode").selectOption("EXACT");
   await page.getByTestId("add-product-from-url").click();
   await expect(page).toHaveURL(/\/products\/[^/]+$/);
 
