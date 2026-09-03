@@ -4,10 +4,12 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  cartActionApprovalPath,
   claimNextCartAction,
   completeCartAction,
   failCartAction,
   getConfiguredChromeProfile,
+  markCartActionIndeterminate,
 } from "@/lib/cart-actions";
 import { audit, getDatabase } from "@/lib/db";
 
@@ -26,6 +28,7 @@ export async function executeCartAction(args: {
   productKey: string;
   retailerId: string;
   profileName: string;
+  approvalFilePath?: string;
 }) {
   const rawResult = await new Promise<string>((resolve, reject) => {
     const scriptPath = path.join(
@@ -33,25 +36,29 @@ export async function executeCartAction(args: {
       "scripts",
       "cart-ui-executor.ps1",
     );
+    const commandArguments = [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+      "-ProductUrl",
+      args.productUrl,
+      "-ProductKey",
+      args.productKey,
+      "-ExpectedProfileName",
+      args.profileName,
+      "-RetailerId",
+      args.retailerId,
+    ];
+    if (args.approvalFilePath) {
+      commandArguments.push("-ApprovalFilePath", args.approvalFilePath);
+    }
     const child = spawn(
       "pwsh",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        scriptPath,
-        "-ProductUrl",
-        args.productUrl,
-        "-ProductKey",
-        args.productKey,
-        "-ExpectedProfileName",
-        args.profileName,
-        "-RetailerId",
-        args.retailerId,
-      ],
+      commandArguments,
       {
         cwd: process.cwd(),
         windowsHide: true,
@@ -63,7 +70,7 @@ export async function executeCartAction(args: {
     const timeout = setTimeout(() => {
       child.kill();
       reject(new Error("Cart UI execution timed out."));
-    }, 120_000);
+    }, 195_000);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -124,8 +131,17 @@ export async function runNextCartAction() {
       productKey: action.product_key,
       retailerId: action.retailer_id,
       profileName,
+      approvalFilePath: cartActionApprovalPath(action.id),
     });
-    completeCartAction(database, action.id, result);
+    if (!completeCartAction(database, action.id, result)) {
+      audit(
+        "cart_action",
+        action.id,
+        "SKIPPED",
+        "The executor returned after product auto-add approval was revoked; inspect the retailer cart before retrying.",
+      );
+      return { processed: 1, succeeded: 0 };
+    }
     audit(
       "cart_action",
       action.id,
@@ -138,8 +154,16 @@ export async function runNextCartAction() {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown cart execution error.";
-    failCartAction(database, action.id, message);
-    audit("cart_action", action.id, "FAILED", message);
+    if (
+      message.startsWith("INDETERMINATE:") &&
+      markCartActionIndeterminate(database, action.id, message)
+    ) {
+      audit("cart_action", action.id, "INDETERMINATE", message);
+    } else if (failCartAction(database, action.id, message)) {
+      audit("cart_action", action.id, "FAILED", message);
+    } else {
+      audit("cart_action", action.id, "SKIPPED", message);
+    }
     return { processed: 1, succeeded: 0 };
   }
 }

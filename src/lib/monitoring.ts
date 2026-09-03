@@ -1389,7 +1389,9 @@ async function waitForScanPacing() {
   await new Promise((resolve) => setTimeout(resolve, pacingDelayMs));
 }
 
-export async function runDueScans() {
+export async function runDueScans(
+  afterObservation?: () => Promise<void>,
+) {
   const listings = getDatabase()
     .prepare(
       `SELECT id FROM listings
@@ -1400,6 +1402,7 @@ export async function runDueScans() {
     .all(nowIso()) as Array<{ id: string }>;
   for (const [index, listing] of listings.entries()) {
     await observeListing(listing.id);
+    await afterObservation?.();
     if (index < listings.length - 1) {
       await waitForScanPacing();
     }

@@ -17,11 +17,18 @@ function scheduleNextTick() {
 }
 
 async function tick() {
-  const count = await runDueScans();
-  const cart = await runNextCartAction();
+  let cartProcessed = 0;
+  let cartSucceeded = 0;
+  const drainCartAction = async () => {
+    const result = await runNextCartAction();
+    cartProcessed += result.processed;
+    cartSucceeded += result.succeeded;
+  };
+  const count = await runDueScans(drainCartAction);
+  await drainCartAction();
   const enriched = await enrichNextProduct();
   console.log(
-    `[${new Date().toISOString()}] completed ${count} due observation(s), ${cart.succeeded}/${cart.processed} cart action(s), ${enriched} metadata crawl(s)`,
+    `[${new Date().toISOString()}] completed ${count} due observation(s), ${cartSucceeded}/${cartProcessed} cart action(s), ${enriched} metadata crawl(s)`,
   );
 }
 

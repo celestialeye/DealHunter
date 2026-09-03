@@ -7,7 +7,11 @@ import { z } from "zod";
 import { audit, createId, getDatabase, nowIso } from "@/lib/db";
 import { formatAvailability } from "@/lib/format";
 import { calculateNextSchedule, runProjectScan } from "@/lib/monitoring";
-import { CART_AUTOMATION_TERMS_VERSION } from "@/lib/cart-actions";
+import {
+  CART_AUTOMATION_TERMS_VERSION,
+  revokeListingCartActions,
+  revokeProductCartActions,
+} from "@/lib/cart-actions";
 import {
   assertAllowedDiscordWebhook,
   sendDiscordTest,
@@ -469,17 +473,7 @@ export async function updateProductAutoCartAction(formData: FormData) {
         productId,
       );
     if (!enabled) {
-      database
-        .prepare(
-          `UPDATE cart_actions
-           SET status = 'SKIPPED',
-               error_message = 'Product auto-add approval was disabled.',
-               completed_at = ?, updated_at = ?
-           WHERE listing_id IN (
-             SELECT id FROM listings WHERE product_id = ?
-           ) AND status = 'PENDING'`,
-        )
-        .run(updatedAt, updatedAt, productId);
+      revokeProductCartActions(database, productId, updatedAt);
     }
     database.exec("COMMIT");
   } catch (error) {
@@ -518,9 +512,18 @@ export async function deleteListingAction(formData: FormData) {
     throw new Error("Listing to remove was not found.");
   }
 
-  database
-    .prepare("DELETE FROM listings WHERE id = ? AND product_id = ?")
-    .run(listingId, productId);
+  const updatedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    revokeListingCartActions(database, listingId, updatedAt);
+    database
+      .prepare("DELETE FROM listings WHERE id = ? AND product_id = ?")
+      .run(listingId, productId);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
   audit(
     "listing",
     listingId,

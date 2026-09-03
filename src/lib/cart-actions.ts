@@ -1,6 +1,8 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-import { createId, nowIso } from "@/lib/db";
+import { createId, getDataDirectory, nowIso } from "@/lib/db";
 import { hostnameMatches } from "@/lib/retailer-registry";
 import type {
   CartActionRecord,
@@ -82,11 +84,11 @@ const cartRetailerAdapters: Record<
   },
   "retailer-costco": {
     domains: ["costco.com"],
-    patterns: [/\.product\.(\d+)\.html$/i],
+    patterns: [/\/p\/(?:[^/]+\/)*(\d+)\/?$/i, /\.product\.(\d+)\.html$/i],
   },
   "retailer-sams-club": {
     domains: ["samsclub.com"],
-    patterns: [/\/ip\/[^/]+\/(prod\d+)/i],
+    patterns: [/\/ip\/[^/]+\/((?:prod)?\d+)/i],
   },
   "retailer-barnes-noble": {
     domains: ["barnesandnoble.com"],
@@ -109,7 +111,7 @@ function builtInProductKey(retailerId: string, url: URL) {
     throw new Error("Product URL does not match the selected retailer.");
   }
   for (const pattern of adapter.patterns) {
-    const match = `${url.pathname}${url.search}`.match(pattern);
+    const match = url.pathname.match(pattern) ?? url.search.match(pattern);
     if (match) return match[1];
   }
   throw new Error("Product URL does not contain a supported product ID.");
@@ -280,9 +282,78 @@ export function getConfiguredChromeProfile(database: DatabaseSync) {
   return configuredChromeProfile(database);
 }
 
+export function cartActionApprovalPath(actionId: string) {
+  return path.join(
+    getDataDirectory(),
+    "cart-action-approvals",
+    `${actionId}.approved`,
+  );
+}
+
+function removeCartActionApproval(actionId: string) {
+  rmSync(cartActionApprovalPath(actionId), { force: true });
+}
+
+export function revokeProductCartActions(
+  database: DatabaseSync,
+  productId: string,
+  updatedAt: string,
+) {
+  const actions = database
+    .prepare(
+      `SELECT id
+       FROM cart_actions
+       WHERE listing_id IN (
+         SELECT id FROM listings WHERE product_id = ?
+       ) AND status IN ('PENDING', 'RUNNING')`,
+    )
+    .all(productId) as Array<{ id: string }>;
+  database
+    .prepare(
+      `UPDATE cart_actions
+       SET status = 'SKIPPED',
+           error_message = 'Product auto-add approval was disabled.',
+           completed_at = ?, updated_at = ?
+       WHERE listing_id IN (
+         SELECT id FROM listings WHERE product_id = ?
+       ) AND status IN ('PENDING', 'RUNNING')`,
+    )
+    .run(updatedAt, updatedAt, productId);
+  for (const action of actions) {
+    removeCartActionApproval(action.id);
+  }
+}
+
+export function revokeListingCartActions(
+  database: DatabaseSync,
+  listingId: string,
+  updatedAt: string,
+) {
+  const actions = database
+    .prepare(
+      `SELECT id
+       FROM cart_actions
+       WHERE listing_id = ? AND status IN ('PENDING', 'RUNNING')`,
+    )
+    .all(listingId) as Array<{ id: string }>;
+  database
+    .prepare(
+      `UPDATE cart_actions
+       SET status = 'SKIPPED',
+           error_message = 'The monitored listing was removed.',
+           completed_at = ?, updated_at = ?
+       WHERE listing_id = ? AND status IN ('PENDING', 'RUNNING')`,
+    )
+    .run(updatedAt, updatedAt, listingId);
+  for (const action of actions) {
+    removeCartActionApproval(action.id);
+  }
+}
+
 export function claimNextCartAction(
   database: DatabaseSync,
 ): CartActionRecord | null {
+  let approvalPath: string | null = null;
   database.exec("BEGIN IMMEDIATE");
   try {
     if (!configuredChromeProfile(database)) {
@@ -290,6 +361,33 @@ export function claimNextCartAction(
       return null;
     }
     const checkedAt = nowIso();
+    const staleBefore = new Date(Date.now() - 3 * 60_000).toISOString();
+    const staleRunningActions = database
+      .prepare(
+        `SELECT id
+         FROM cart_actions
+         WHERE status = 'RUNNING'
+           AND COALESCE(started_at, updated_at) <= ?`,
+      )
+      .all(staleBefore) as Array<{ id: string }>;
+    for (const action of staleRunningActions) {
+      removeCartActionApproval(action.id);
+    }
+    database
+      .prepare(
+        `UPDATE cart_listing_states
+         SET eligible_match = 0, updated_at = ?
+         WHERE listing_id IN (
+           SELECT listing_id
+           FROM cart_actions
+           WHERE (status = 'PENDING' AND expires_at <= ?)
+              OR (
+                status = 'RUNNING'
+                AND COALESCE(started_at, updated_at) <= ?
+              )
+         )`,
+      )
+      .run(checkedAt, checkedAt, staleBefore);
     database
       .prepare(
         `UPDATE cart_actions
@@ -299,6 +397,16 @@ export function claimNextCartAction(
          WHERE status = 'PENDING' AND expires_at <= ?`,
       )
       .run(checkedAt, checkedAt, checkedAt);
+    database
+      .prepare(
+        `UPDATE cart_actions
+         SET status = 'SKIPPED',
+             error_message = 'Cart execution lease expired before completion.',
+             completed_at = ?, updated_at = ?
+         WHERE status = 'RUNNING'
+           AND COALESCE(started_at, updated_at) <= ?`,
+      )
+      .run(checkedAt, checkedAt, staleBefore);
     const action = database
       .prepare(
         `SELECT * FROM cart_actions
@@ -351,6 +459,9 @@ export function claimNextCartAction(
          WHERE id = ? AND status = 'PENDING'`,
       )
       .run(startedAt, startedAt, action.id);
+    approvalPath = cartActionApprovalPath(action.id);
+    mkdirSync(path.dirname(approvalPath), { recursive: true });
+    writeFileSync(approvalPath, action.id, { encoding: "utf8", flag: "wx" });
     database.exec("COMMIT");
     return {
       ...action,
@@ -361,6 +472,9 @@ export function claimNextCartAction(
     };
   } catch (error) {
     database.exec("ROLLBACK");
+    if (approvalPath) {
+      rmSync(approvalPath, { force: true });
+    }
     throw error;
   }
 }
@@ -376,7 +490,7 @@ export function completeCartAction(
   },
 ) {
   const completedAt = nowIso();
-  database
+  const updateResult = database
     .prepare(
       `UPDATE cart_actions
        SET status = 'SUCCEEDED', baseline_product_quantity = ?,
@@ -394,6 +508,26 @@ export function completeCartAction(
       completedAt,
       actionId,
     );
+  removeCartActionApproval(actionId);
+  return updateResult.changes > 0;
+}
+
+export function markCartActionIndeterminate(
+  database: DatabaseSync,
+  actionId: string,
+  errorMessage: string,
+) {
+  const completedAt = nowIso();
+  const updateResult = database
+    .prepare(
+      `UPDATE cart_actions
+       SET status = 'INDETERMINATE', error_message = ?, completed_at = ?,
+           updated_at = ?
+       WHERE id = ? AND status = 'RUNNING'`,
+    )
+    .run(errorMessage.slice(0, 1000), completedAt, completedAt, actionId);
+  removeCartActionApproval(actionId);
+  return updateResult.changes > 0;
 }
 
 export function failCartAction(
@@ -402,7 +536,7 @@ export function failCartAction(
   errorMessage: string,
 ) {
   const completedAt = nowIso();
-  database
+  const result = database
     .prepare(
       `UPDATE cart_actions
        SET status = 'FAILED', error_message = ?, completed_at = ?,
@@ -410,4 +544,6 @@ export function failCartAction(
        WHERE id = ? AND status = 'RUNNING'`,
     )
     .run(errorMessage.slice(0, 1000), completedAt, completedAt, actionId);
+  removeCartActionApproval(actionId);
+  return result.changes > 0;
 }

@@ -32,32 +32,46 @@ import {
 
 export const dynamic = "force-dynamic";
 
+type SearchValue = string | string[] | undefined;
+
+function searchValue(value: SearchValue) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export default async function ProductPage({
   params,
   searchParams,
 }: {
   params: Promise<{ productId: string }>;
   searchParams: Promise<{
-    timelineRetailer?: string;
-    timelineStatus?: string;
-    timelineAvailability?: string;
-    timelineSource?: string;
-    timelineRange?: "24h" | "7d" | "30d" | "all";
-    timelinePage?: string;
-    timelinePageSize?: string;
+    timelineRetailer?: SearchValue;
+    timelineStatus?: SearchValue;
+    timelineAvailability?: SearchValue;
+    timelineSource?: SearchValue;
+    timelineRange?: SearchValue;
+    timelinePage?: SearchValue;
+    timelinePageSize?: SearchValue;
   }>;
 }) {
   const { productId } = await params;
-  const query = await searchParams;
+  const rawQuery = await searchParams;
+  const query = Object.fromEntries(
+    Object.entries(rawQuery).map(([key, value]) => [key, searchValue(value)]),
+  ) as Record<string, string | undefined>;
   const data = getProduct(productId);
   if (!data) notFound();
   const { product, listings, learningRuns } = data;
+  const range = ["24h", "7d", "30d", "all"].includes(
+    query.timelineRange ?? "",
+  )
+    ? (query.timelineRange as ProductTimelineFilters["range"])
+    : "7d";
   const timelineFilters: ProductTimelineFilters = {
     retailer: query.timelineRetailer || undefined,
     status: query.timelineStatus || undefined,
     availability: query.timelineAvailability || undefined,
     source: query.timelineSource || undefined,
-    range: query.timelineRange ?? "7d",
+    range,
     page: Number(query.timelinePage || "1"),
     pageSize: Number(query.timelinePageSize || "25"),
   };
@@ -180,34 +194,42 @@ export default async function ProductPage({
             action={updateProductAutoCartAction}
           >
             <input type="hidden" name="productId" value={productId} />
-            <div>
-              <ShoppingCart size={18} />
+            <div className="product-auto-cart-copy">
+              <span className="product-auto-cart-icon" aria-hidden="true">
+                <ShoppingCart size={18} />
+              </span>
               <span>
-                <strong>Auto add to cart</strong>
+                <strong>Keep one in cart automatically</strong>
                 <small>
-                  Applies to every retailer listing. When availability is
-                  confirmed, DealHunter ensures one unit is in that retailer
-                  cart and does nothing if it is already present.
+                  Applies to every retailer listing. After confirmed
+                  availability, DealHunter adds one only when the exact item is
+                  not already in that retailer cart.
                 </small>
               </span>
             </div>
-            <label htmlFor="product-auto-add-to-cart">
-              <input
-                id="product-auto-add-to-cart"
-                name="autoAddToCart"
-                type="checkbox"
-                defaultChecked={Boolean(product.auto_add_to_cart)}
-                data-testid="auto-add-to-cart"
-              />
-              Enabled
-            </label>
-            <button
-              className="button button-secondary"
-              type="submit"
-              data-testid="save-auto-add-to-cart"
-            >
-              Save
-            </button>
+            <div className="product-auto-cart-actions">
+              <label
+                className="product-auto-cart-toggle"
+                htmlFor="product-auto-add-to-cart"
+              >
+                <input
+                  id="product-auto-add-to-cart"
+                  name="autoAddToCart"
+                  type="checkbox"
+                  defaultChecked={Boolean(product.auto_add_to_cart)}
+                  data-testid="auto-add-to-cart"
+                />
+                <span className="product-auto-cart-switch" aria-hidden="true" />
+                <span>Auto-add</span>
+              </label>
+              <button
+                className="button button-secondary"
+                type="submit"
+                data-testid="save-auto-add-to-cart"
+              >
+                Save setting
+              </button>
+            </div>
           </form>
           {product.image_url ? (
             <small className="source-note">

@@ -106,7 +106,18 @@ export function getProjects() {
 export function getProject(id: string) {
   const database = getDatabase();
   const project = database
-    .prepare("SELECT * FROM projects WHERE id = ?")
+    .prepare(
+      `SELECT p.*,
+        (
+          SELECT COUNT(*)
+          FROM monitoring_runs r
+          JOIN listings l ON l.id = r.listing_id
+          JOIN products pr ON pr.id = l.product_id
+          WHERE pr.project_id = p.id
+        ) AS monitoring_run_count
+       FROM projects p
+       WHERE p.id = ?`,
+    )
     .get(id) as Record<string, string | number | null> | undefined;
   if (!project) return null;
 
@@ -214,19 +225,6 @@ export function getProject(id: string) {
     )
     .all(id) as Array<Record<string, string | number | null>>;
 
-  const monitoringRuns = database
-    .prepare(
-      `SELECT r.*, l.title, l.retailer, l.url,
-        pr.canonical_name AS product_name
-       FROM monitoring_runs r
-       JOIN listings l ON l.id = r.listing_id
-       JOIN products pr ON pr.id = l.product_id
-       WHERE pr.project_id = ?
-       ORDER BY r.started_at DESC
-       LIMIT 100`,
-    )
-    .all(id) as Array<Record<string, string | number | null>>;
-
   return {
     project,
     products,
@@ -235,7 +233,6 @@ export function getProject(id: string) {
     notificationChannels,
     notificationDeliveries,
     snapshots,
-    monitoringRuns,
   };
 }
 
@@ -496,9 +493,10 @@ export function getProductMonitoringTimeline(
   };
   const range = filters.range ?? "7d";
   if (range !== "all") {
+    const hours = ranges[range] ?? ranges["7d"];
     conditions.push("r.started_at >= ?");
     values.push(
-      new Date(Date.now() - ranges[range] * 60 * 60 * 1000).toISOString(),
+      new Date(Date.now() - hours * 60 * 60 * 1000).toISOString(),
     );
   }
 

@@ -11,11 +11,15 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$RetailerId,
 
-  [int]$TimeoutSeconds = 90
+  [string]$ApprovalFilePath,
+
+  [int]$TimeoutSeconds = 180
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$script:Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+$script:OutboundClickPerformed = $false
 
 Add-Type -AssemblyName UIAutomationClient | Out-Null
 Add-Type -AssemblyName UIAutomationTypes | Out-Null
@@ -155,11 +159,11 @@ function Get-ProductKeyFromUrl {
     }
     "retailer-costco" = @{
       Domain = "costco.com"
-      Patterns = @("\.product\.(\d+)\.html$")
+      Patterns = @("/p/(?:[^/]+/)*(\d+)/?$", "\.product\.(\d+)\.html$")
     }
     "retailer-sams-club" = @{
       Domain = "samsclub.com"
-      Patterns = @("/ip/[^/]+/(prod\d+)")
+      Patterns = @("/ip/[^/]+/((?:prod)?\d+)")
     }
     "retailer-barnes-noble" = @{
       Domain = "barnesandnoble.com"
@@ -181,12 +185,27 @@ function Get-ProductKeyFromUrl {
     throw "Product URL does not match retailer $Id."
   }
   foreach ($pattern in $rule.Patterns) {
-    $match = [regex]::Match($uri.PathAndQuery, $pattern)
+    $match = [regex]::Match($uri.AbsolutePath, $pattern)
+    if (-not $match.Success) {
+      $match = [regex]::Match($uri.Query, $pattern)
+    }
     if ($match.Success) {
       return $match.Groups[1].Value
     }
   }
   throw "Product URL does not contain a supported product ID."
+}
+
+function Assert-ActionApproved {
+  if (
+    $ApprovalFilePath -and
+    -not (Test-Path -LiteralPath $ApprovalFilePath -PathType Leaf)
+  ) {
+    throw "Product auto-add approval was revoked before execution."
+  }
+  if ([DateTime]::UtcNow.AddSeconds(30) -ge $script:Deadline) {
+    throw "Insufficient time remains to add and reconcile the cart safely."
+  }
 }
 
 function Test-ExactKeyToken {
@@ -283,7 +302,6 @@ function Wait-Until {
     [string]$FailureMessage
   )
 
-  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   do {
     try {
       $value = & $Condition
@@ -293,7 +311,7 @@ function Wait-Until {
     } catch [System.Windows.Automation.ElementNotAvailableException] {
     }
     Start-Sleep -Milliseconds 250
-  } while ([DateTime]::UtcNow -lt $deadline)
+  } while ([DateTime]::UtcNow -lt $script:Deadline)
 
   throw $FailureMessage
 }
@@ -618,7 +636,8 @@ function Find-PrimaryAddButton {
 function Click-Element {
   param(
     [System.Windows.Automation.AutomationElement]$Element,
-    [IntPtr]$WindowHandle
+    [IntPtr]$WindowHandle,
+    [switch]$RequiresApproval
   )
 
   if (
@@ -643,6 +662,9 @@ function Click-Element {
       [int][Math]::Round($point.X),
       [int][Math]::Round($point.Y)
     )
+    if ($RequiresApproval) {
+      Assert-ActionApproved
+    }
     [DealHunterWindows]::mouse_event(
       $script:MouseLeftDown,
       0,
@@ -650,6 +672,9 @@ function Click-Element {
       0,
       [UIntPtr]::Zero
     )
+    if ($RequiresApproval) {
+      $script:OutboundClickPerformed = $true
+    }
     [DealHunterWindows]::mouse_event(
       $script:MouseLeftUp,
       0,
@@ -688,7 +713,7 @@ function Add-ProductAndOpenCart {
       return $null
     }
   } "The product did not expose an unambiguous cart control."
-  Click-Element $button $Window.Handle
+  Click-Element $button $Window.Handle -RequiresApproval
 
   $cartLink = Wait-Until {
     $links = Get-DescendantsByControlType $Window.Element (
@@ -760,6 +785,13 @@ try {
     finalCartUnits = $final.TotalUnits
   } | ConvertTo-Json -Compress
 } catch {
-  [Console]::Error.WriteLine($_.Exception.Message)
+  if ($script:OutboundClickPerformed) {
+    [Console]::Error.WriteLine(
+      "INDETERMINATE: The cart may have changed before verification failed. " +
+      $_.Exception.Message
+    )
+  } else {
+    [Console]::Error.WriteLine($_.Exception.Message)
+  }
   exit 1
 }

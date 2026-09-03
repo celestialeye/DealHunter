@@ -37,6 +37,7 @@ import {
 export const dynamic = "force-dynamic";
 
 type Row = Record<string, string | number | null>;
+type SearchValue = string | string[] | undefined;
 type ProjectView =
   | "overview"
   | "products"
@@ -45,6 +46,10 @@ type ProjectView =
   | "schedule"
   | "runs"
   | "setup";
+
+function searchValue(value: SearchValue) {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 const views: Array<{
   id: ProjectView;
@@ -131,13 +136,13 @@ function OverviewView({
   products,
   listings,
   rules,
-  monitoringRuns,
+  monitoringRunCount,
 }: {
   projectId: string;
   products: Row[];
   listings: Row[];
   rules: Row[];
-  monitoringRuns: Row[];
+  monitoringRunCount: number;
 }) {
   const navigation = [
     {
@@ -164,7 +169,7 @@ function OverviewView({
     {
       view: "runs",
       label: "Recorded checks",
-      value: monitoringRuns.length,
+      value: monitoringRunCount,
       detail: "Inspect every system observation.",
       icon: ScrollText,
     },
@@ -1678,21 +1683,24 @@ export default async function ProjectPage({
 }: {
   params: Promise<{ projectId: string }>;
   searchParams: Promise<{
-    view?: string;
-    runQuery?: string;
-    runProduct?: string;
-    runRetailer?: string;
-    runStatus?: string;
-    runAvailability?: string;
-    runSource?: string;
-    runPage?: string;
-    runPageSize?: string;
-    listingRetailer?: string;
-    listingStatus?: string;
+    view?: SearchValue;
+    runQuery?: SearchValue;
+    runProduct?: SearchValue;
+    runRetailer?: SearchValue;
+    runStatus?: SearchValue;
+    runAvailability?: SearchValue;
+    runSource?: SearchValue;
+    runPage?: SearchValue;
+    runPageSize?: SearchValue;
+    listingRetailer?: SearchValue;
+    listingStatus?: SearchValue;
   }>;
 }) {
   const { projectId } = await params;
-  const query = await searchParams;
+  const rawQuery = await searchParams;
+  const query = Object.fromEntries(
+    Object.entries(rawQuery).map(([key, value]) => [key, searchValue(value)]),
+  ) as Record<string, string | undefined>;
   const requestedView = query.view;
   const activeView = views.some((view) => view.id === requestedView)
     ? (requestedView as ProjectView)
@@ -1706,7 +1714,6 @@ export default async function ProjectPage({
     rules,
     notificationChannels,
     notificationDeliveries,
-    monitoringRuns,
   } = data;
   const retailerFilter = listings.some(
     (listing) => String(listing.retailer) === query.listingRetailer,
@@ -1763,7 +1770,7 @@ export default async function ProjectPage({
             products={products}
             listings={listings}
             rules={rules}
-            monitoringRuns={monitoringRuns}
+            monitoringRunCount={Number(project.monitoring_run_count ?? 0)}
           />
         ) : null}
         {activeView === "products" ? (

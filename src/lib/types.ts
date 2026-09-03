@@ -80,6 +80,7 @@ export type CartActionStatus =
   | "RUNNING"
   | "SUCCEEDED"
   | "FAILED"
+  | "INDETERMINATE"
   | "SKIPPED";
 
 export interface CartActionRecord {

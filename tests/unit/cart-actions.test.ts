@@ -1,11 +1,25 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  cartActionApprovalPath,
+  claimNextCartAction,
   cartProductKey,
   isEligibleCartConfirmation,
+  markCartActionIndeterminate,
   nextCartEpisode,
+  revokeListingCartActions,
+  revokeProductCartActions,
   updateCartEligibility,
 } from "../../src/lib/cart-actions";
 import type {
@@ -145,10 +159,22 @@ describe("cartProductKey", () => {
     ).toBe("1234567");
     expect(
       cartProductKey(
+        "retailer-costco",
+        "https://www.costco.com/p/-/example/100115268",
+      ),
+    ).toBe("100115268");
+    expect(
+      cartProductKey(
         "retailer-sams-club",
         "https://www.samsclub.com/ip/example/prod12345678",
       ),
     ).toBe("prod12345678");
+    expect(
+      cartProductKey(
+        "retailer-sams-club",
+        "https://www.samsclub.com/ip/example/13612812905",
+      ),
+    ).toBe("13612812905");
     expect(
       cartProductKey(
         "retailer-barnes-noble",
@@ -161,6 +187,27 @@ describe("cartProductKey", () => {
         "https://www.tcgplayer.com/product/123456/example",
       ),
     ).toBe("123456");
+  });
+
+  it("extracts stable keys when retailer URLs include query parameters", () => {
+    expect(
+      cartProductKey(
+        "retailer-target",
+        "https://www.target.com/p/example/-/A-95113212?preselect=95113212",
+      ),
+    ).toBe("A-95113212");
+    expect(
+      cartProductKey(
+        "retailer-best-buy",
+        "https://www.bestbuy.com/product/example/JJG2TL8X74/sku/6685574?intl=nosplash",
+      ),
+    ).toBe("6685574");
+    expect(
+      cartProductKey(
+        "retailer-costco",
+        "https://www.costco.com/p/-/example/100115268?langId=-1",
+      ),
+    ).toBe("100115268");
   });
 
   it("rejects cross-retailer and non-product URLs", () => {
@@ -179,6 +226,296 @@ describe("cartProductKey", () => {
         "https://example.com/product/123",
       ),
     ).toThrow("does not support");
+  });
+
+});
+
+describe("cart action approval", () => {
+  const previousDataDirectory = process.env.DEALHUNTER_DATA_DIR;
+  const temporaryDirectories: string[] = [];
+
+  afterEach(() => {
+    if (previousDataDirectory === undefined) {
+      delete process.env.DEALHUNTER_DATA_DIR;
+    } else {
+      process.env.DEALHUNTER_DATA_DIR = previousDataDirectory;
+    }
+    for (const directory of temporaryDirectories.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  function cartActionDatabase() {
+    const database = new DatabaseSync(":memory:");
+    database.exec(`
+        CREATE TABLE products (
+          id TEXT PRIMARY KEY,
+          auto_add_to_cart INTEGER NOT NULL,
+          auto_add_terms_version TEXT
+        );
+        CREATE TABLE listings (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL
+        );
+        CREATE TABLE cart_automation_settings (
+          id TEXT PRIMARY KEY,
+          chrome_profile_name TEXT
+        );
+        CREATE TABLE cart_listing_states (
+          listing_id TEXT PRIMARY KEY,
+          eligible_match INTEGER NOT NULL,
+          episode_sequence INTEGER NOT NULL,
+          last_action_episode_sequence INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE cart_actions (
+          id TEXT PRIMARY KEY,
+          listing_id TEXT NOT NULL,
+          monitoring_run_id TEXT NOT NULL,
+          confirmation_group_id TEXT NOT NULL,
+          retailer_id TEXT NOT NULL,
+          retailer TEXT NOT NULL,
+          product_key TEXT NOT NULL,
+          product_url TEXT NOT NULL,
+          availability TEXT NOT NULL,
+          quantity INTEGER NOT NULL,
+          episode_sequence INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          baseline_product_quantity INTEGER,
+          final_product_quantity INTEGER,
+          baseline_cart_units INTEGER,
+          final_cart_units INTEGER,
+          error_message TEXT,
+          confirmed_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          completed_at TEXT
+        );
+        INSERT INTO products VALUES (
+          'product-1', 1, '2026-09-01'
+        );
+        INSERT INTO listings VALUES ('listing-1', 'product-1');
+        INSERT INTO cart_automation_settings VALUES ('default', 'Peter');
+        INSERT INTO cart_listing_states VALUES (
+          'listing-1', 1, 1, 1, '2026-09-01T00:00:00.000Z'
+        );
+      `);
+    return database;
+  }
+
+  function useTemporaryDataDirectory() {
+    const directory = mkdtempSync(path.join(tmpdir(), "dealhunter-cart-"));
+    temporaryDirectories.push(directory);
+    process.env.DEALHUNTER_DATA_DIR = directory;
+    return directory;
+  }
+
+  function insertAction(
+    database: DatabaseSync,
+    actionId: string,
+    status: "PENDING" | "RUNNING",
+    expiresAt: string,
+    episodeSequence = 1,
+  ) {
+    const now = new Date().toISOString();
+    database
+      .prepare(
+        `INSERT INTO cart_actions
+           (id, listing_id, monitoring_run_id, confirmation_group_id,
+            retailer_id, retailer, product_key, product_url, availability,
+            quantity, episode_sequence, status, confirmed_at, expires_at,
+            created_at, updated_at)
+           VALUES (?, 'listing-1', 'run-1', 'confirmation-1',
+            'retailer-target', 'Target', 'A-1', 'https://target.com/p/x/-/A-1',
+            'IN_STOCK', 1, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(actionId, episodeSequence, status, now, expiresAt, now, now);
+  }
+
+  it("creates an execution approval when claiming an action", () => {
+    useTemporaryDataDirectory();
+    const database = cartActionDatabase();
+    insertAction(
+      database,
+      "pending-action",
+      "PENDING",
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+
+    expect(claimNextCartAction(database)?.status).toBe("RUNNING");
+    expect(existsSync(cartActionApprovalPath("pending-action"))).toBe(true);
+    database.close();
+  });
+
+  it("revokes pending and running actions and removes execution approvals", () => {
+    useTemporaryDataDirectory();
+    const database = cartActionDatabase();
+    const now = new Date().toISOString();
+    insertAction(
+      database,
+      "pending-action",
+      "PENDING",
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+    insertAction(
+      database,
+      "running-action",
+      "RUNNING",
+      new Date(Date.now() + 60_000).toISOString(),
+      2,
+    );
+    for (const actionId of ["pending-action", "running-action"]) {
+      const approvalPath = cartActionApprovalPath(actionId);
+      mkdirSync(path.dirname(approvalPath), { recursive: true });
+      writeFileSync(approvalPath, actionId);
+    }
+
+    revokeProductCartActions(database, "product-1", now);
+
+    expect(
+      database
+        .prepare("SELECT id, status FROM cart_actions ORDER BY id")
+        .all(),
+    ).toEqual([
+      { id: "pending-action", status: "SKIPPED" },
+      { id: "running-action", status: "SKIPPED" },
+    ]);
+    expect(existsSync(cartActionApprovalPath("pending-action"))).toBe(false);
+    expect(existsSync(cartActionApprovalPath("running-action"))).toBe(false);
+    database.close();
+  });
+
+  it("revokes a running action when its monitored listing is removed", () => {
+    useTemporaryDataDirectory();
+    const database = cartActionDatabase();
+    const now = new Date().toISOString();
+    insertAction(
+      database,
+      "running-action",
+      "RUNNING",
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+    const approvalPath = cartActionApprovalPath("running-action");
+    mkdirSync(path.dirname(approvalPath), { recursive: true });
+    writeFileSync(approvalPath, "running-action");
+
+    revokeListingCartActions(database, "listing-1", now);
+
+    expect(
+      database
+        .prepare(
+          `SELECT status FROM cart_actions WHERE id = 'running-action'`,
+        )
+        .get(),
+    ).toEqual({ status: "SKIPPED" });
+    expect(existsSync(approvalPath)).toBe(false);
+    database.close();
+  });
+
+  it("resets expired eligibility so a fresh observation can queue again", () => {
+    useTemporaryDataDirectory();
+    const database = cartActionDatabase();
+    insertAction(
+      database,
+      "expired-action",
+      "PENDING",
+      new Date(Date.now() - 60_000).toISOString(),
+    );
+
+    expect(claimNextCartAction(database)).toBeNull();
+    expect(
+      database
+        .prepare(
+          `SELECT eligible_match
+             FROM cart_listing_states WHERE listing_id = 'listing-1'`,
+        )
+        .get(),
+    ).toEqual({ eligible_match: 0 });
+    expect(
+      database
+        .prepare(
+          `SELECT status FROM cart_actions WHERE id = 'expired-action'`,
+        )
+        .get(),
+    ).toEqual({ status: "SKIPPED" });
+    database.close();
+  });
+
+  it("revokes stale running actions and rearms their listing", () => {
+    useTemporaryDataDirectory();
+    const database = cartActionDatabase();
+    insertAction(
+      database,
+      "stale-action",
+      "RUNNING",
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+    database
+      .prepare(
+        `UPDATE cart_actions
+         SET started_at = ?, updated_at = ?
+         WHERE id = 'stale-action'`,
+      )
+      .run(
+        new Date(Date.now() - 4 * 60_000).toISOString(),
+        new Date(Date.now() - 4 * 60_000).toISOString(),
+      );
+    const approvalPath = cartActionApprovalPath("stale-action");
+    mkdirSync(path.dirname(approvalPath), { recursive: true });
+    writeFileSync(approvalPath, "stale-action");
+
+    expect(claimNextCartAction(database)).toBeNull();
+    expect(
+      database
+        .prepare(
+          `SELECT eligible_match
+           FROM cart_listing_states WHERE listing_id = 'listing-1'`,
+        )
+        .get(),
+    ).toEqual({ eligible_match: 0 });
+    expect(
+      database
+        .prepare(
+          `SELECT status FROM cart_actions WHERE id = 'stale-action'`,
+        )
+        .get(),
+    ).toEqual({ status: "SKIPPED" });
+    expect(existsSync(approvalPath)).toBe(false);
+    database.close();
+  });
+
+  it("records post-click verification failures as indeterminate", () => {
+    useTemporaryDataDirectory();
+    const database = cartActionDatabase();
+    insertAction(
+      database,
+      "running-action",
+      "RUNNING",
+      new Date(Date.now() + 60_000).toISOString(),
+    );
+    const approvalPath = cartActionApprovalPath("running-action");
+    mkdirSync(path.dirname(approvalPath), { recursive: true });
+    writeFileSync(approvalPath, "running-action");
+
+    expect(
+      markCartActionIndeterminate(
+        database,
+        "running-action",
+        "INDETERMINATE: reconciliation timed out",
+      ),
+    ).toBe(true);
+    expect(
+      database
+        .prepare(
+          `SELECT status FROM cart_actions WHERE id = 'running-action'`,
+        )
+        .get(),
+    ).toEqual({ status: "INDETERMINATE" });
+    expect(existsSync(approvalPath)).toBe(false);
+    database.close();
   });
 });
 

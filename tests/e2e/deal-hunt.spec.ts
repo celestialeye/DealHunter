@@ -363,6 +363,14 @@ test("adds a crawled product by URL and manages retailer records", async ({
   await page.getByTestId("save-auto-add-to-cart").click();
   await page.reload();
   await expect(page.getByTestId("auto-add-to-cart")).toBeChecked();
+  await page.goto(
+    "/products/pokemon-etb?timelineRange=invalid&timelineRange=7d",
+  );
+  await expect(page.getByTestId("product-monitoring-timeline")).toBeVisible();
+  await page.goto(
+    "/projects/pokemon-30th-celebration?view=runs&runQuery=x&runQuery=y",
+  );
+  await expect(page.getByTestId("monitoring-log")).toBeVisible();
 
   await page.goto(productUrl);
   await page.getByTestId("remove-listing").click();
