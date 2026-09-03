@@ -7,10 +7,7 @@ import { z } from "zod";
 import { audit, createId, getDatabase, nowIso } from "@/lib/db";
 import { formatAvailability } from "@/lib/format";
 import { calculateNextSchedule, runProjectScan } from "@/lib/monitoring";
-import {
-  CART_AUTOMATION_TERMS_VERSION,
-  cartProductKey,
-} from "@/lib/cart-actions";
+import { CART_AUTOMATION_TERMS_VERSION } from "@/lib/cart-actions";
 import {
   assertAllowedDiscordWebhook,
   sendDiscordTest,
@@ -438,33 +435,21 @@ export async function updateListingScheduleAction(formData: FormData) {
   revalidatePath(`/products/${productId}`);
 }
 
-export async function updateListingAutoCartAction(formData: FormData) {
-  const listingId = text(formData, "listingId");
+export async function updateProductAutoCartAction(formData: FormData) {
+  const productId = text(formData, "productId");
   const enabled = formData.get("autoAddToCart") === "on";
   const database = getDatabase();
-  const listing = database
+  const product = database
     .prepare(
-      `SELECT l.product_id, l.retailer_id, l.url, pr.project_id
-       FROM listings l
-       JOIN products pr ON pr.id = l.product_id
-       WHERE l.id = ?`,
+      `SELECT id, project_id
+       FROM products
+       WHERE id = ?`,
     )
-    .get(listingId) as
-    | {
-        product_id: string;
-        project_id: string;
-        retailer_id: string | null;
-        url: string;
-      }
+    .get(productId) as
+    | { id: string; project_id: string }
     | undefined;
-  if (!listing) {
-    throw new Error("Listing auto-cart target was not found.");
-  }
-  if (enabled) {
-    if (!listing.retailer_id) {
-      throw new Error("Listing retailer is not configured.");
-    }
-    cartProductKey(listing.retailer_id, listing.url);
+  if (!product) {
+    throw new Error("Product auto-cart target was not found.");
   }
 
   const updatedAt = nowIso();
@@ -472,37 +457,29 @@ export async function updateListingAutoCartAction(formData: FormData) {
   try {
     database
       .prepare(
-        `UPDATE listings
+        `UPDATE products
          SET auto_add_to_cart = ?, auto_add_terms_version = ?,
              auto_add_enabled_at = ?
          WHERE id = ?`,
       )
       .run(
         enabled ? 1 : 0,
-        enabled ? CART_AUTOMATION_TERMS_VERSION : null,
+        CART_AUTOMATION_TERMS_VERSION,
         enabled ? updatedAt : null,
-        listingId,
+        productId,
       );
-    if (enabled) {
-      database
-        .prepare(
-          `INSERT INTO cart_listing_states
-           (listing_id, eligible_match, episode_sequence,
-            last_action_episode_sequence, updated_at)
-           VALUES (?, 0, 0, 0, ?)
-           ON CONFLICT(listing_id) DO NOTHING`,
-        )
-        .run(listingId, updatedAt);
-    } else {
+    if (!enabled) {
       database
         .prepare(
           `UPDATE cart_actions
            SET status = 'SKIPPED',
-               error_message = 'Listing auto-add approval was disabled.',
+               error_message = 'Product auto-add approval was disabled.',
                completed_at = ?, updated_at = ?
-           WHERE listing_id = ? AND status = 'PENDING'`,
+           WHERE listing_id IN (
+             SELECT id FROM listings WHERE product_id = ?
+           ) AND status = 'PENDING'`,
         )
-        .run(updatedAt, updatedAt, listingId);
+        .run(updatedAt, updatedAt, productId);
     }
     database.exec("COMMIT");
   } catch (error) {
@@ -511,15 +488,15 @@ export async function updateListingAutoCartAction(formData: FormData) {
   }
 
   audit(
-    "listing",
-    listingId,
+    "product",
+    productId,
     enabled ? "AUTO_CART_ENABLED" : "AUTO_CART_DISABLED",
     enabled
-      ? `Approved automatic one-unit cart additions under terms ${CART_AUTOMATION_TERMS_VERSION}; checkout remains disabled.`
+      ? `Enabled automatic ensure-one-in-cart actions across all listings under terms ${CART_AUTOMATION_TERMS_VERSION}; checkout remains disabled.`
       : "Revoked automatic cart-add approval.",
   );
-  revalidatePath(`/products/${listing.product_id}`);
-  revalidatePath(`/projects/${listing.project_id}`);
+  revalidatePath(`/products/${productId}`);
+  revalidatePath(`/projects/${product.project_id}`);
   revalidatePath("/settings");
 }
 

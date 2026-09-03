@@ -56,9 +56,9 @@ export interface ListingRecord {
   last_observed_at: string | null;
   next_run_at: string;
   observation_count: number;
-  auto_add_to_cart: number;
-  auto_add_terms_version: string | null;
-  auto_add_enabled_at: string | null;
+  product_auto_add_to_cart: number;
+  product_auto_add_terms_version: string | null;
+  product_auto_add_enabled_at: string | null;
   active_recipe_id?: string | null;
   active_recipe_version?: number | null;
   active_recipe_strategy?: string | null;

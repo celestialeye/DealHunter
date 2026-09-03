@@ -955,30 +955,50 @@ tbody tr:hover td {
   font-size: 10px;
 }
 
-.auto-cart-form {
+.product-auto-cart-control {
   display: grid;
-  gap: 8px;
-  min-width: 190px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbf8ef;
 }
 
-.auto-cart-option {
+.product-auto-cart-control > div,
+.product-auto-cart-control > label {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  color: var(--ink);
-  font-size: 12px;
-  line-height: 1.35;
-  cursor: pointer;
 }
 
-.auto-cart-option input {
-  margin-top: 2px;
+.product-auto-cart-control > div > span,
+.product-auto-cart-control strong,
+.product-auto-cart-control small {
+  display: block;
 }
 
-.auto-cart-form > small {
+.product-auto-cart-control small {
+  margin-top: 3px;
   color: var(--ink-soft);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.product-auto-cart-control > label {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .product-auto-cart-control {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
 }
 
 .rule-pipeline {

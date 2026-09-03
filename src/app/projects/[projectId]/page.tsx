@@ -22,7 +22,6 @@ import {
   createRuleAction,
   deleteRuleAction,
   runProjectScanAction,
-  updateListingAutoCartAction,
   updateProjectAlertDestinationsAction,
   updateProjectScheduleAction,
   updateRuleAction,
@@ -608,7 +607,6 @@ function ListingsView({
               <th>Price</th>
               <th>Mode</th>
               <th>Interval</th>
-              <th>Auto cart</th>
               <th>Last check</th>
             </tr>
           </thead>
@@ -676,44 +674,12 @@ function ListingsView({
                     </small>
                   </span>
                 </td>
-                <td>
-                  <form
-                    className="auto-cart-form"
-                    action={updateListingAutoCartAction}
-                  >
-                    <input
-                      type="hidden"
-                      name="listingId"
-                      value={String(listing.id)}
-                    />
-                    <label
-                      className="auto-cart-option"
-                      htmlFor={`auto-cart-${String(listing.id)}`}
-                    >
-                      <input
-                        id={`auto-cart-${String(listing.id)}`}
-                        name="autoAddToCart"
-                        type="checkbox"
-                        defaultChecked={Boolean(listing.auto_add_to_cart)}
-                        data-testid="auto-add-to-cart"
-                      />
-                      <span>Add one when available</span>
-                    </label>
-                    <button
-                      className="button button-secondary"
-                      type="submit"
-                      data-testid="save-auto-add-to-cart"
-                    >
-                      Save
-                    </button>
-                  </form>
-                </td>
                 <td>{formatDate(listing.last_observed_at)}</td>
               </tr>
             ))}
             {!filteredListings.length ? (
               <tr>
-                <td colSpan={8}>
+                <td colSpan={7}>
                   <div className="listing-filter-empty">
                     <strong>No listings match these filters.</strong>
                     <span>

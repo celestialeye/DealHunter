@@ -22,6 +22,9 @@ Pokémon Center, Best Buy, and Target.
 - Adaptive randomized monitoring by default, with bounded and explicit fixed
   overrides and project-level inheritance.
 - Project defaults, retailer guardrails, and listing overrides.
+- Product-level automatic cart handling, enabled by default, that ensures one
+  unit is present after confirmed in-stock or preorder availability without
+  duplicating an existing cart item.
 - Actionable alert policies for in-stock, preorder, backorder, and limited
   ordering opportunities.
 - System-managed Discord webhooks stored encrypted at rest and selected per

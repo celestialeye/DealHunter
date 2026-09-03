@@ -7,6 +7,7 @@ import {
   ImageIcon,
   Radar,
   RefreshCw,
+  ShoppingCart,
   SlidersHorizontal,
   Store,
   Trash2,
@@ -18,7 +19,7 @@ import {
   deleteListingAction,
   refreshProductDetailsAction,
   relearnListingAction,
-  updateListingAutoCartAction,
+  updateProductAutoCartAction,
   updateListingScheduleAction,
 } from "@/app/actions";
 import { StatusBadge } from "@/components/status-badge";
@@ -174,6 +175,40 @@ export default async function ProductPage({
               </a>
             ) : null}
           </div>
+          <form
+            className="product-auto-cart-control"
+            action={updateProductAutoCartAction}
+          >
+            <input type="hidden" name="productId" value={productId} />
+            <div>
+              <ShoppingCart size={18} />
+              <span>
+                <strong>Auto add to cart</strong>
+                <small>
+                  Applies to every retailer listing. When availability is
+                  confirmed, DealHunter ensures one unit is in that retailer
+                  cart and does nothing if it is already present.
+                </small>
+              </span>
+            </div>
+            <label htmlFor="product-auto-add-to-cart">
+              <input
+                id="product-auto-add-to-cart"
+                name="autoAddToCart"
+                type="checkbox"
+                defaultChecked={Boolean(product.auto_add_to_cart)}
+                data-testid="auto-add-to-cart"
+              />
+              Enabled
+            </label>
+            <button
+              className="button button-secondary"
+              type="submit"
+              data-testid="save-auto-add-to-cart"
+            >
+              Save
+            </button>
+          </form>
           {product.image_url ? (
             <small className="source-note">
               Image cached for private monitoring from the retailer-provided
@@ -315,42 +350,6 @@ export default async function ProductPage({
                 {listing.active_recipe_id
                   ? "Relearn monitoring"
                   : "Learn monitoring"}
-              </button>
-            </form>
-            <form
-              className="auto-cart-form"
-              action={updateListingAutoCartAction}
-            >
-              <input
-                type="hidden"
-                name="listingId"
-                value={String(listing.id)}
-              />
-              <label
-                className="auto-cart-option"
-                htmlFor={`auto-cart-${String(listing.id)}`}
-              >
-                <input
-                  id={`auto-cart-${String(listing.id)}`}
-                  name="autoAddToCart"
-                  type="checkbox"
-                  defaultChecked={Boolean(listing.auto_add_to_cart)}
-                  data-testid="auto-add-to-cart"
-                />
-                <span>
-                  Auto add one unit after confirmed in-stock or preorder
-                </span>
-              </label>
-              <small>
-                Checking this box is approval to add to cart only. Checkout and
-                purchase are never attempted.
-              </small>
-              <button
-                className="button button-secondary"
-                type="submit"
-                data-testid="save-auto-add-to-cart"
-              >
-                Save auto-cart approval
               </button>
             </form>
             <details className="schedule-editor">

@@ -41,9 +41,9 @@ function listing(overrides: Partial<ListingRecord> = {}): ListingRecord {
     last_observed_at: null,
     next_run_at: new Date(0).toISOString(),
     observation_count: 0,
-    auto_add_to_cart: 1,
-    auto_add_terms_version: "2026-09-01",
-    auto_add_enabled_at: new Date(0).toISOString(),
+    product_auto_add_to_cart: 1,
+    product_auto_add_terms_version: "2026-09-01",
+    product_auto_add_enabled_at: new Date(0).toISOString(),
     ...overrides,
   };
 }
@@ -107,6 +107,18 @@ describe("cartProductKey", () => {
         "https://www.bestbuy.com/site/example/6576418.p",
       ),
     ).toBe("6576418");
+    expect(
+      cartProductKey(
+        "retailer-best-buy",
+        "https://www.bestbuy.com/product/example/JJG2TL8X74/sku/6685574",
+      ),
+    ).toBe("6685574");
+    expect(
+      cartProductKey(
+        "retailer-best-buy",
+        "https://www.bestbuy.com/product/example/JJG2TL8XCJ",
+      ),
+    ).toBe("JJG2TL8XCJ");
     expect(
       cartProductKey(
         "retailer-pokemon-center",
@@ -260,7 +272,7 @@ describe("updateCartEligibility", () => {
     expect(
       updateCartEligibility(
         database,
-        listing({ auto_add_to_cart: 0 }),
+        listing({ product_auto_add_to_cart: 0 }),
         "run-disabled",
         "confirmation-disabled",
         eligible,

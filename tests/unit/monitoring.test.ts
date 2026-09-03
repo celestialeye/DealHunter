@@ -39,9 +39,9 @@ function listing(overrides: Partial<ListingRecord> = {}): ListingRecord {
     last_observed_at: null,
     next_run_at: new Date(0).toISOString(),
     observation_count: 0,
-    auto_add_to_cart: 0,
-    auto_add_terms_version: null,
-    auto_add_enabled_at: null,
+    product_auto_add_to_cart: 1,
+    product_auto_add_terms_version: "2026-09-01",
+    product_auto_add_enabled_at: new Date(0).toISOString(),
     ...overrides,
   };
 }

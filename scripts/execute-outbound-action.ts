@@ -103,7 +103,9 @@ async function main() {
     await addIssueComment(
       repository,
       issueNumber,
-      `Outbound action completed: exact product quantity ${result.baselineProductQuantity} → ${result.finalProductQuantity}, total cart units ${result.baselineCartUnits} → ${result.finalCartUnits}. No checkout or purchase was attempted.`,
+      result.added
+        ? `Outbound action completed: exact product quantity ${result.baselineProductQuantity} → ${result.finalProductQuantity}, total cart units ${result.baselineCartUnits} → ${result.finalCartUnits}. No checkout or purchase was attempted.`
+        : `Outbound action completed without adding a duplicate: the cart already contained ${result.finalProductQuantity} unit(s) of the exact product. No checkout or purchase was attempted.`,
     );
     await githubRequest(repository, `/issues/${issueNumber}`, {
       method: "PATCH",

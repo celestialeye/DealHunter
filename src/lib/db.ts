@@ -80,6 +80,9 @@ function migrate(database: DatabaseSync) {
       owned_quantity INTEGER NOT NULL DEFAULT 0 CHECK(owned_quantity >= 0),
       expected_price_cents INTEGER,
       notes TEXT NOT NULL DEFAULT '',
+      auto_add_to_cart INTEGER NOT NULL DEFAULT 1,
+      auto_add_terms_version TEXT NOT NULL DEFAULT '2026-09-01',
+      auto_add_enabled_at TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -380,6 +383,25 @@ function migrate(database: DatabaseSync) {
   ensureColumn(database, "products", "metadata_status", "TEXT");
   ensureColumn(database, "products", "metadata_error", "TEXT");
   ensureColumn(database, "products", "metadata_checked_at", "TEXT");
+  ensureColumn(
+    database,
+    "products",
+    "auto_add_to_cart",
+    "INTEGER NOT NULL DEFAULT 1",
+  );
+  ensureColumn(
+    database,
+    "products",
+    "auto_add_terms_version",
+    "TEXT NOT NULL DEFAULT '2026-09-01'",
+  );
+  ensureColumn(database, "products", "auto_add_enabled_at", "TEXT");
+  database.exec(`
+    UPDATE products
+    SET auto_add_terms_version = '2026-09-01',
+        auto_add_enabled_at = COALESCE(auto_add_enabled_at, created_at)
+    WHERE auto_add_to_cart = 1;
+  `);
   ensureColumn(database, "listings", "retailer_id", "TEXT");
   ensureColumn(database, "listings", "retailer_sku", "TEXT");
   ensureColumn(
@@ -451,14 +473,6 @@ function migrate(database: DatabaseSync) {
   ensureColumn(database, "listings", "confirmed_at", "TEXT");
   ensureColumn(database, "listings", "last_attempt_status", "TEXT");
   ensureColumn(database, "listings", "last_attempt_at", "TEXT");
-  ensureColumn(
-    database,
-    "listings",
-    "auto_add_to_cart",
-    "INTEGER NOT NULL DEFAULT 0",
-  );
-  ensureColumn(database, "listings", "auto_add_terms_version", "TEXT");
-  ensureColumn(database, "listings", "auto_add_enabled_at", "TEXT");
   ensureColumn(database, "listings", "availability_hint", "TEXT");
   ensureColumn(database, "listings", "availability_hint_text", "TEXT");
   ensureColumn(database, "listings", "availability_hint_source", "TEXT");

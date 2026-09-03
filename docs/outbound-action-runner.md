@@ -5,21 +5,23 @@ issues after the `approval:approved` label is added. The executor only accepts
 Target product URLs and only adds one item to the cart. It does not implement
 checkout or purchasing.
 
-## Automatic monitored-listing actions
+## Automatic monitored-product actions
 
-Every monitored listing exposes an **Auto add one when available** checkbox.
-Saving a checked box records listing-specific approval under the current terms
-version. No GitHub issue or approval label is used for these automatic actions.
+Every product exposes one **Auto add to cart** setting that applies to all of
+its retailer listings. The setting is enabled by default. Saving it records
+product-level approval under the current terms version. No GitHub issue or
+approval label is used for these automatic actions.
 
 After two fresh authoritative observations confirm `IN_STOCK` or `PREORDER`,
 the monitoring transaction queues one cart action for that availability
 episode. Repeated in-stock checks do not queue duplicates. A confirmed
 non-orderable state rearms the listing for a later availability episode.
 
-The monitor worker drains at most one queued cart action per tick. Before
-reporting success it requires both:
+The monitor worker drains at most one queued cart action per tick. It reads the
+cart first and does not add another unit when the exact product is already
+present. When the product is absent, success requires both:
 
-- the exact product line quantity to increase by one; and
+- the exact product line quantity to become one; and
 - total quantities across actual cart lines to increase by one.
 
 Recommendations, saved items, cart-header count alone, and unrelated product

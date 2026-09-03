@@ -134,8 +134,8 @@ export default function SettingsPage() {
           <div>
             <h2>Automatic cart actions</h2>
             <p>
-              Each listing has its own approval checkbox. Approved listings add
-              exactly one unit after fresh in-stock or preorder confirmation.
+              Each product has one setting that applies to every retailer
+              listing. Automatic cart handling is enabled by default.
             </p>
           </div>
           <ShoppingCart size={18} />
@@ -167,9 +167,10 @@ export default function SettingsPage() {
             <div className="learning-model-note">
               <strong>Terms {CART_AUTOMATION_TERMS_VERSION}</strong>
               <span>
-                Listing approval permits one-unit cart additions only. The
-                executor cannot check out, buy now, place orders, or submit
-                payment.
+                Enabled products ensure one unit is present after fresh
+                in-stock or preorder confirmation. Existing cart items are not
+                duplicated. The executor cannot check out, buy now, place
+                orders, or submit payment.
               </span>
             </div>
             <button

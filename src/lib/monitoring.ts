@@ -717,7 +717,10 @@ async function acquireObservation(
   if (url.hostname === "target.com" || url.hostname.endsWith(".target.com")) {
     return observeTargetWithBrowser(listing);
   }
-  if (listing.auto_add_to_cart && listing.retailer_id?.startsWith("retailer-")) {
+  if (
+    listing.product_auto_add_to_cart &&
+    listing.retailer_id?.startsWith("retailer-")
+  ) {
     return observeRetailerWithBrowser(listing);
   }
 
@@ -1164,6 +1167,9 @@ export async function observeListing(listingId: string) {
   const listing = database
     .prepare(
       `SELECT l.*, pr.project_id, pr.canonical_name AS product_name,
+        pr.auto_add_to_cart AS product_auto_add_to_cart,
+        pr.auto_add_terms_version AS product_auto_add_terms_version,
+        pr.auto_add_enabled_at AS product_auto_add_enabled_at,
         p.default_schedule_mode AS project_default_schedule_mode,
         p.default_interval_seconds AS project_default_interval_seconds,
         p.default_interval_min_seconds AS project_default_interval_min_seconds,

@@ -61,7 +61,12 @@ const cartRetailerAdapters: Record<
   },
   "retailer-best-buy": {
     domains: ["bestbuy.com"],
-    patterns: [/\/(\d+)\.p\/?$/i, /[?&]skuId=(\d+)/i],
+    patterns: [
+      /\/sku\/(\d+)\/?$/i,
+      /\/product\/[^/]+\/([^/]+)(?:\/|$)/i,
+      /\/(\d+)\.p\/?$/i,
+      /[?&]skuId=(\d+)/i,
+    ],
   },
   "retailer-pokemon-center": {
     domains: ["pokemoncenter.com"],
@@ -145,11 +150,11 @@ export function isEligibleCartConfirmation(
   return true;
 }
 
-function listingHasCurrentApproval(listing: ListingRecord) {
+function productHasCurrentApproval(listing: ListingRecord) {
   return Boolean(
-    listing.auto_add_to_cart &&
-      listing.auto_add_terms_version === CART_AUTOMATION_TERMS_VERSION &&
-      listing.auto_add_enabled_at,
+    listing.product_auto_add_to_cart &&
+      listing.product_auto_add_terms_version ===
+        CART_AUTOMATION_TERMS_VERSION,
   );
 }
 
@@ -213,7 +218,7 @@ export function updateCartEligibility(
   if (
     !eligible ||
     !confirmationGroupId ||
-    !listingHasCurrentApproval(listing) ||
+    !productHasCurrentApproval(listing) ||
     (previous?.last_action_episode_sequence ?? 0) >=
       transition.state.episodeSequence
   ) {
@@ -308,8 +313,10 @@ export function claimNextCartAction(
     }
     const listing = database
       .prepare(
-        `SELECT auto_add_to_cart, auto_add_terms_version
-         FROM listings WHERE id = ?`,
+        `SELECT pr.auto_add_to_cart, pr.auto_add_terms_version
+         FROM listings l
+         JOIN products pr ON pr.id = l.product_id
+         WHERE l.id = ?`,
       )
       .get(action.listing_id) as
       | { auto_add_to_cart: number; auto_add_terms_version: string | null }
@@ -327,7 +334,7 @@ export function claimNextCartAction(
            WHERE id = ? AND status = 'PENDING'`,
         )
         .run(
-          "Listing auto-add approval was disabled or expired.",
+          "Product auto-add approval was disabled or expired.",
           skippedAt,
           skippedAt,
           action.id,

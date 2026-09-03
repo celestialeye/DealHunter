@@ -134,7 +134,12 @@ function Get-ProductKeyFromUrl {
     }
     "retailer-best-buy" = @{
       Domain = "bestbuy.com"
-      Patterns = @("/(\d+)\.p/?$", "[?&]skuId=(\d+)")
+      Patterns = @(
+        "/sku/(\d+)/?$",
+        "/product/[^/]+/([^/]+)(?:/|$)",
+        "/(\d+)\.p/?$",
+        "[?&]skuId=(\d+)"
+      )
     }
     "retailer-pokemon-center" = @{
       Domain = "pokemoncenter.com"
@@ -723,25 +728,31 @@ try {
     $null = Close-DedicatedChromeWindow $baselineWindow
   }
 
-  $actionWindow = $null
-  try {
-    $actionWindow = Open-DedicatedChromeWindow $ProductUrl
-    $null = Assert-ExpectedProfile $actionWindow.Element
-    $null = Add-ProductAndOpenCart $actionWindow
-    $final = Wait-ForCartSnapshot $actionWindow.Element
-  } finally {
-    $null = Close-DedicatedChromeWindow $actionWindow
-  }
+  $added = $false
+  $final = $baseline
+  if ($baseline.ProductQuantity -eq 0) {
+    $actionWindow = $null
+    try {
+      $actionWindow = Open-DedicatedChromeWindow $ProductUrl
+      $null = Assert-ExpectedProfile $actionWindow.Element
+      $null = Add-ProductAndOpenCart $actionWindow
+      $final = Wait-ForCartSnapshot $actionWindow.Element
+    } finally {
+      $null = Close-DedicatedChromeWindow $actionWindow
+    }
 
-  if (
-    $final.ProductQuantity -ne $baseline.ProductQuantity + 1 -or
-    $final.TotalUnits -ne $baseline.TotalUnits + 1
-  ) {
-    throw "Cart reconciliation failed: product $($baseline.ProductQuantity) -> $($final.ProductQuantity), total units $($baseline.TotalUnits) -> $($final.TotalUnits); both must increase by one."
+    if (
+      $final.ProductQuantity -ne 1 -or
+      $final.TotalUnits -ne $baseline.TotalUnits + 1
+    ) {
+      throw "Cart reconciliation failed: product $($baseline.ProductQuantity) -> $($final.ProductQuantity), total units $($baseline.TotalUnits) -> $($final.TotalUnits); an absent product must become exactly one unit."
+    }
+    $added = $true
   }
 
   [pscustomobject]@{
     success = $true
+    added = $added
     productKey = $ProductKey
     baselineProductQuantity = $baseline.ProductQuantity
     finalProductQuantity = $final.ProductQuantity

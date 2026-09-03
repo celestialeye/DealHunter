@@ -354,16 +354,15 @@ test("adds a crawled product by URL and manages retailer records", async ({
   await expect(page.getByTestId("screening-engine")).toHaveValue("AUTO");
 
   await page.goto("/products/pokemon-etb");
-  const targetListing = page
-    .locator(".retailer-card")
-    .filter({ hasText: "Target" });
-  await targetListing.getByTestId("auto-add-to-cart").check();
-  await targetListing.getByTestId("save-auto-add-to-cart").click();
+  await expect(page.getByTestId("auto-add-to-cart")).toBeChecked();
+  await page.getByTestId("auto-add-to-cart").uncheck();
+  await page.getByTestId("save-auto-add-to-cart").click();
   await page.reload();
-  await expect(
-    page.locator(".retailer-card").filter({ hasText: "Target" })
-      .getByTestId("auto-add-to-cart"),
-  ).toBeChecked();
+  await expect(page.getByTestId("auto-add-to-cart")).not.toBeChecked();
+  await page.getByTestId("auto-add-to-cart").check();
+  await page.getByTestId("save-auto-add-to-cart").click();
+  await page.reload();
+  await expect(page.getByTestId("auto-add-to-cart")).toBeChecked();
 
   await page.goto(productUrl);
   await page.getByTestId("remove-listing").click();

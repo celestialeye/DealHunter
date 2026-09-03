@@ -13,6 +13,7 @@ import { audit, getDatabase } from "@/lib/db";
 
 const executionResultSchema = z.object({
   success: z.literal(true),
+  added: z.boolean(),
   productKey: z.string().min(1),
   baselineProductQuantity: z.number().int().nonnegative(),
   finalProductQuantity: z.number().int().nonnegative(),
@@ -129,7 +130,9 @@ export async function runNextCartAction() {
       "cart_action",
       action.id,
       "SUCCEEDED",
-      `${action.retailer} cart quantity increased by one for ${action.product_key}; checkout was not attempted.`,
+      result.added
+        ? `${action.retailer} cart now contains one unit of ${action.product_key}; checkout was not attempted.`
+        : `${action.retailer} cart already contained ${result.finalProductQuantity} unit(s) of ${action.product_key}; no duplicate was added.`,
     );
     return { processed: 1, succeeded: 1 };
   } catch (error) {
