@@ -19,7 +19,8 @@ non-orderable state rearms the listing for a later availability episode.
 
 The monitor worker drains at most one queued cart action per tick. It reads the
 cart first and does not add another unit when the exact product is already
-present. When the product is absent, success requires both:
+present exactly once. If more than one unit is already present, it fails closed
+without changing quantity. When the product is absent, success requires both:
 
 - the exact product line quantity to become one; and
 - total quantities across actual cart lines to increase by one.
@@ -29,8 +30,10 @@ links are never accepted as proof.
 
 Built-in adapters cover Target, Best Buy, Pokémon Center, Walmart, GameStop,
 Costco, Sam's Club, Barnes & Noble, and TCGplayer. Retailer challenges,
-ambiguous controls, profile mismatches, and unsupported cart markup fail
-closed without checkout.
+ambiguous or compound purchase controls, profile mismatches, and unsupported
+cart markup fail closed without checkout. A machine-wide lease serializes each
+Chrome-profile-and-retailer cart transaction from baseline read through final
+reconciliation.
 
 ## Runner requirements
 

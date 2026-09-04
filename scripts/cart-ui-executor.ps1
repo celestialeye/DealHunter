@@ -20,6 +20,8 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $script:Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 $script:OutboundClickPerformed = $false
+$script:CartLease = $null
+$script:CartLeaseAcquired = $false
 
 Add-Type -AssemblyName UIAutomationClient | Out-Null
 Add-Type -AssemblyName UIAutomationTypes | Out-Null
@@ -236,6 +238,44 @@ function Assert-ActionApproved {
   if ([DateTime]::UtcNow.AddSeconds(30) -ge $script:Deadline) {
     throw "Insufficient time remains to add and reconcile the cart safely."
   }
+}
+
+function Acquire-CartLease {
+  $leaseKey = "$ExpectedProfileName`n$RetailerId"
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $leaseHash = [Convert]::ToHexString(
+      $sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($leaseKey))
+    )
+  } finally {
+    $sha256.Dispose()
+  }
+  $script:CartLease = [Threading.Mutex]::new(
+    $false,
+    "Global\DealHunterCart-$leaseHash"
+  )
+  $waitSeconds = [Math]::Max(
+    1,
+    [Math]::Floor(($script:Deadline - [DateTime]::UtcNow).TotalSeconds) - 30
+  )
+  try {
+    $script:CartLeaseAcquired = $script:CartLease.WaitOne(
+      [TimeSpan]::FromSeconds($waitSeconds)
+    )
+  } catch [Threading.AbandonedMutexException] {
+    $script:CartLeaseAcquired = $true
+  }
+  if (-not $script:CartLeaseAcquired) {
+    throw "Another cart action is already running for this Chrome profile and retailer."
+  }
+  Assert-ActionApproved
+}
+
+function Test-SafeCartControlName {
+  param([string]$Name)
+
+  $normalized = ($Name -replace "\s+", " ").Trim()
+  return $normalized -match "(?i)^(add to cart|add to bag)$"
 }
 
 function Test-ExactKeyToken {
@@ -674,7 +714,7 @@ function Find-PrimaryAddButton {
     $name = $control.Current.Name
     if (
       $control.Current.IsEnabled -and
-      $name -match "(?i)\b(add to cart|add to bag|pre-?order)\b"
+      (Test-SafeCartControlName $name)
     ) {
       $automationId = $control.Current.AutomationId
       if (
@@ -694,7 +734,7 @@ function Find-PrimaryAddButton {
             [System.Windows.Automation.ControlType]::Hyperlink
           )
         ) | Where-Object {
-          $_.Current.Name -match "(?i)\b(add to cart|add to bag|pre-?order)\b"
+          Test-SafeCartControlName $_.Current.Name
         }
         $links = Get-DescendantsByControlType $container (
           [System.Windows.Automation.ControlType]::Hyperlink
@@ -724,7 +764,7 @@ function Find-PrimaryAddButton {
   }
 
   if ($matches.Count -eq 0) {
-    throw "No enabled primary Add to cart or Preorder control was found."
+    throw "No enabled exact Add to cart or Add to bag control was found."
   }
   throw "Purchase controls were visible, but none were bound to the exact product."
 }
@@ -911,7 +951,7 @@ function Add-ProductAndOpenCart {
     }
     return $null
   } "The retailer did not confirm that the product was added."
-  Click-Element $cartLink $Window.Handle
+  Click-Element $cartLink $Window.Handle -RequiresApproval
 }
 
 try {
@@ -924,6 +964,7 @@ try {
     throw "ExpectedProfileName is required."
   }
   $script:ProfileDirectory = Get-ChromeProfileDirectory
+  Acquire-CartLease
 
   $cartUrl = Get-CartUrl $RetailerId
   $baselineWindow = $null
@@ -937,6 +978,9 @@ try {
 
   $added = $false
   $final = $baseline
+  if ($baseline.ProductQuantity -gt 1) {
+    throw "The cart already contains more than one unit of the exact product; automatic quantity reduction is not approved."
+  }
   if ($baseline.ProductQuantity -eq 0) {
     $actionWindow = $null
     try {
@@ -976,4 +1020,11 @@ try {
     [Console]::Error.WriteLine($_.Exception.Message)
   }
   exit 1
+} finally {
+  if ($script:CartLeaseAcquired -and $script:CartLease) {
+    $script:CartLease.ReleaseMutex()
+  }
+  if ($script:CartLease) {
+    $script:CartLease.Dispose()
+  }
 }

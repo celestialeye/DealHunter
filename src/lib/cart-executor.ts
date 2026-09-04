@@ -148,7 +148,7 @@ export async function runNextCartAction() {
       "SUCCEEDED",
       result.added
         ? `${action.retailer} cart now contains one unit of ${action.product_key}; checkout was not attempted.`
-        : `${action.retailer} cart already contained ${result.finalProductQuantity} unit(s) of ${action.product_key}; no duplicate was added.`,
+        : `${action.retailer} cart already contained one unit of ${action.product_key}; no duplicate was added.`,
     );
     return { processed: 1, succeeded: 1 };
   } catch (error) {
