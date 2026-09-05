@@ -22,9 +22,13 @@ Pokémon Center, Best Buy, and Target.
 - Adaptive randomized monitoring by default, with bounded and explicit fixed
   overrides and project-level inheritance.
 - Project defaults, retailer guardrails, and listing overrides.
+- Product-level automatic cart handling, enabled by default, that ensures one
+  unit is present after confirmed in-stock or preorder availability without
+  duplicating an existing cart item.
 - Actionable alert policies for in-stock, preorder, backorder, and limited
   ordering opportunities.
-- Discord webhook notifications stored encrypted at rest.
+- System-managed Discord webhooks stored encrypted at rest and selected per
+  project.
 - Dual-model monitor learning from DOM and screenshot evidence.
 - Versioned deterministic recipes, generated tests, retailer memory, and
   user-triggered relearning.
@@ -74,6 +78,17 @@ npm run worker:once
 npm run images:mine -- pokemon-30th-celebration
 npm run recipes:learn -- pokemon-30th-celebration
 ```
+
+## Repository workflow
+
+DealHunter provides a repository-local `/dealhunter-workflow:shipit` command
+for Copilot CLI. The command reviews the accumulated task, runs the offline
+merge gate and relevant end-to-end tests, creates focused Conventional
+Commits, pushes a branch, and opens or updates a pull request without merging
+it automatically.
+
+The workflow is enabled only when Copilot CLI runs from this repository.
+Restart the CLI after pulling changes to `.github/copilot/settings.json`.
 
 ## Monitor learning
 
@@ -135,6 +150,8 @@ Set `DEALHUNTER_DATA_DIR` to use another location.
 - Authoritative actionable candidates require a fresh second observation.
 - Rules alert only on confirmed false-to-true transitions.
 - Transition keys prevent duplicate alerts.
+- Projects explicitly select which configured notification destinations receive
+  their alerts, and delivery history is scoped to the originating project.
 - Challenge pages produce a challenged or quarantined state rather than a
   fabricated availability result.
 - The application does not implement CAPTCHA solving, stealth fingerprinting,

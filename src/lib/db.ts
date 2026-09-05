@@ -80,9 +80,11 @@ function migrate(database: DatabaseSync) {
       owned_quantity INTEGER NOT NULL DEFAULT 0 CHECK(owned_quantity >= 0),
       expected_price_cents INTEGER,
       notes TEXT NOT NULL DEFAULT '',
+      auto_add_to_cart INTEGER NOT NULL DEFAULT 1,
+      auto_add_terms_version TEXT NOT NULL DEFAULT '2026-09-01',
+      auto_add_enabled_at TEXT,
       created_at TEXT NOT NULL
     );
-
     CREATE TABLE IF NOT EXISTS listings (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -180,6 +182,13 @@ function migrate(database: DatabaseSync) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS project_notification_channels (
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      channel_id TEXT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, channel_id)
+    );
+
     CREATE TABLE IF NOT EXISTS notification_deliveries (
       id TEXT PRIMARY KEY,
       alert_id TEXT REFERENCES alerts(id) ON DELETE CASCADE,
@@ -204,6 +213,55 @@ function migrate(database: DatabaseSync) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS cart_automation_settings (
+      id TEXT PRIMARY KEY CHECK(id = 'default'),
+      chrome_profile_name TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    INSERT OR IGNORE INTO cart_automation_settings
+      (id, updated_at)
+    VALUES
+      ('default', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+    CREATE TABLE IF NOT EXISTS cart_listing_states (
+      listing_id TEXT PRIMARY KEY REFERENCES listings(id) ON DELETE CASCADE,
+      eligible_match INTEGER NOT NULL DEFAULT 0,
+      episode_sequence INTEGER NOT NULL DEFAULT 0,
+      last_action_episode_sequence INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS cart_actions (
+      id TEXT PRIMARY KEY,
+      listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+      monitoring_run_id TEXT NOT NULL REFERENCES monitoring_runs(id) ON DELETE CASCADE,
+      confirmation_group_id TEXT NOT NULL,
+      retailer_id TEXT NOT NULL,
+      retailer TEXT NOT NULL,
+      product_key TEXT NOT NULL,
+      product_url TEXT NOT NULL,
+      availability TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity = 1),
+      episode_sequence INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      baseline_product_quantity INTEGER,
+      final_product_quantity INTEGER,
+      baseline_cart_units INTEGER,
+      final_cart_units INTEGER,
+      error_message TEXT,
+      confirmed_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      UNIQUE(listing_id, episode_sequence)
+    );
+    CREATE INDEX IF NOT EXISTS cart_actions_status_created
+      ON cart_actions(status, created_at);
 
     CREATE TABLE IF NOT EXISTS audit_events (
       id TEXT PRIMARY KEY,
@@ -324,8 +382,48 @@ function migrate(database: DatabaseSync) {
   ensureColumn(database, "products", "metadata_status", "TEXT");
   ensureColumn(database, "products", "metadata_error", "TEXT");
   ensureColumn(database, "products", "metadata_checked_at", "TEXT");
+  ensureColumn(
+    database,
+    "products",
+    "auto_add_to_cart",
+    "INTEGER NOT NULL DEFAULT 1",
+  );
+  ensureColumn(
+    database,
+    "products",
+    "auto_add_terms_version",
+    "TEXT NOT NULL DEFAULT '2026-09-01'",
+  );
+  ensureColumn(database, "products", "auto_add_enabled_at", "TEXT");
+  database.exec(`
+    UPDATE products
+    SET auto_add_terms_version = COALESCE(
+          auto_add_terms_version,
+          '2026-09-01'
+        ),
+        auto_add_enabled_at = COALESCE(auto_add_enabled_at, created_at)
+    WHERE auto_add_to_cart = 1
+      AND auto_add_enabled_at IS NULL;
+
+    CREATE TRIGGER IF NOT EXISTS products_auto_cart_approval_timestamp
+    AFTER INSERT ON products
+    WHEN NEW.auto_add_to_cart = 1 AND NEW.auto_add_enabled_at IS NULL
+    BEGIN
+      UPDATE products
+      SET auto_add_enabled_at = NEW.created_at
+      WHERE id = NEW.id;
+    END;
+  `);
   ensureColumn(database, "listings", "retailer_id", "TEXT");
   ensureColumn(database, "listings", "retailer_sku", "TEXT");
+  ensureColumn(database, "listings", "selection_mode_confirmed_at", "TEXT");
+  database.exec(`
+    UPDATE listings
+    SET selection_mode_confirmed_at = created_at
+    WHERE selection_mode = 'EXACT'
+      AND selection_mode_confirmed_at IS NULL
+      AND id LIKE 'pokemon-listing-%';
+  `);
   ensureColumn(
     database,
     "listings",
@@ -410,6 +508,23 @@ function migrate(database: DatabaseSync) {
   ensureColumn(database, "monitoring_runs", "recipe_version", "INTEGER");
   ensureColumn(
     database,
+    "cart_listing_states",
+    "last_action_episode_sequence",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  ensureColumn(database, "cart_actions", "confirmed_at", "TEXT");
+  ensureColumn(database, "cart_actions", "expires_at", "TEXT");
+  database.exec(`
+    UPDATE cart_actions
+    SET confirmed_at = COALESCE(confirmed_at, created_at),
+        expires_at = COALESCE(
+          expires_at,
+          strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+5 minutes')
+        )
+    WHERE confirmed_at IS NULL OR expires_at IS NULL;
+  `);
+  ensureColumn(
+    database,
     "learning_settings",
     "screening_engine",
     "TEXT NOT NULL DEFAULT 'PLAYWRIGHT'",
@@ -434,6 +549,28 @@ function migrate(database: DatabaseSync) {
       INSERT INTO system_state (key, value, updated_at)
       VALUES (
         'schedule-hierarchy-v1',
+        'complete',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      );
+    `);
+  }
+  const projectAlertRoutingMigration = database
+    .prepare(
+      "SELECT value FROM system_state WHERE key = 'project-alert-routing-v1'",
+    )
+    .get();
+  if (!projectAlertRoutingMigration) {
+    database.exec(`
+      INSERT OR IGNORE INTO project_notification_channels
+        (project_id, channel_id, created_at)
+      SELECT p.id, c.id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      FROM projects p
+      CROSS JOIN notification_channels c
+      WHERE c.enabled = 1;
+
+      INSERT INTO system_state (key, value, updated_at)
+      VALUES (
+        'project-alert-routing-v1',
         'complete',
         strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       );

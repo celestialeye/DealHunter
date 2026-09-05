@@ -1,13 +1,22 @@
-import { Bell, BrainCircuit, LockKeyhole, Send } from "lucide-react";
+import {
+  Bell,
+  BrainCircuit,
+  LockKeyhole,
+  Send,
+  ShoppingCart,
+} from "lucide-react";
 
 import {
   saveDiscordChannelAction,
   sendDiscordTestAction,
+  updateCartAutomationProfileAction,
   updateLearningSettingsAction,
 } from "@/app/actions";
 import { StatusBadge } from "@/components/status-badge";
+import { CART_AUTOMATION_TERMS_VERSION } from "@/lib/cart-actions";
 import { formatDate } from "@/lib/format";
 import {
+  getCartAutomationSettings,
   getLearningSettings,
   getNotificationSettings,
 } from "@/lib/queries";
@@ -15,8 +24,9 @@ import {
 export const dynamic = "force-dynamic";
 
 export default function SettingsPage() {
-  const { channels, deliveries, captures } = getNotificationSettings();
+  const { channels, captures } = getNotificationSettings();
   const learning = getLearningSettings();
+  const cartAutomation = getCartAutomationSettings();
   return (
     <>
       <header className="page-head">
@@ -24,8 +34,8 @@ export default function SettingsPage() {
           <p className="eyebrow">Workspace controls</p>
           <h1>Settings</h1>
           <p className="lede">
-            Configure monitor learning models and external alert delivery while
-            keeping secrets out of page responses.
+            Configure monitor learning models and reusable alert destinations.
+            Each project chooses which destinations it uses.
           </p>
         </div>
         <LockKeyhole size={28} color="var(--amber-deep)" />
@@ -119,12 +129,107 @@ export default function SettingsPage() {
         </form>
       </section>
 
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Automatic cart actions</h2>
+            <p>
+              Each product has one setting that applies to every retailer
+              listing. Automatic cart handling is enabled by default.
+            </p>
+          </div>
+          <ShoppingCart size={18} />
+        </div>
+        <div className="panel-body">
+          <form
+            className="form-grid"
+            action={updateCartAutomationProfileAction}
+          >
+            <div className="field field-wide">
+              <label htmlFor="chrome-profile-name">
+                Signed-in Chrome profile name
+              </label>
+              <input
+                id="chrome-profile-name"
+                name="chromeProfileName"
+                required
+                defaultValue={String(
+                  cartAutomation.settings.chrome_profile_name ?? "",
+                )}
+                placeholder="Peter"
+                data-testid="cart-chrome-profile"
+              />
+              <small>
+                The executor opens a dedicated window in this existing profile
+                and rejects any profile mismatch.
+              </small>
+            </div>
+            <div className="learning-model-note">
+              <strong>Terms {CART_AUTOMATION_TERMS_VERSION}</strong>
+              <span>
+                Enabled products ensure one unit is present after fresh
+                in-stock or preorder confirmation. Existing cart items are not
+                duplicated. The executor cannot check out, buy now, place
+                orders, or submit payment.
+              </span>
+            </div>
+            <button
+              className="button button-amber"
+              type="submit"
+              data-testid="save-cart-profile"
+            >
+              Save Chrome profile
+            </button>
+          </form>
+        </div>
+        {cartAutomation.actions.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Retailer</th>
+                  <th>Status</th>
+                  <th>Quantity proof</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cartAutomation.actions.map((action) => (
+                  <tr key={String(action.id)}>
+                    <td className="primary-cell">
+                      <strong>{String(action.product_name)}</strong>
+                      <small>{String(action.listing_title)}</small>
+                    </td>
+                    <td>{String(action.retailer)}</td>
+                    <td>
+                      <StatusBadge value={String(action.status)} />
+                      {action.error_message ? (
+                        <small>{String(action.error_message)}</small>
+                      ) : null}
+                    </td>
+                    <td>
+                      {action.final_product_quantity !== null
+                        ? `${String(action.baseline_product_quantity)} → ${String(action.final_product_quantity)} product units`
+                        : "Not completed"}
+                    </td>
+                    <td>{formatDate(action.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
+
       <div className="section-grid">
         <section className="panel">
           <div className="panel-head">
             <div>
               <h2>Discord webhooks</h2>
-              <p>Deal alerts are delivered as structured Discord embeds.</p>
+              <p>
+                System-managed destinations available for projects to select.
+              </p>
             </div>
             <Bell size={18} />
           </div>
@@ -137,6 +242,7 @@ export default function SettingsPage() {
                     <th>Type</th>
                     <th>Status</th>
                     <th>Added</th>
+                    <th>Last test</th>
                     <th>Test</th>
                   </tr>
                 </thead>
@@ -154,6 +260,22 @@ export default function SettingsPage() {
                         />
                       </td>
                       <td>{formatDate(channel.created_at)}</td>
+                      <td data-testid="channel-test-status">
+                        {channel.last_test_status ? (
+                          <span className="status-with-source">
+                            <StatusBadge value={channel.last_test_status} />
+                            <small>
+                              {channel.last_test_error
+                                ? String(channel.last_test_error)
+                                : channel.last_test_response_code
+                                  ? `HTTP ${String(channel.last_test_response_code)}`
+                                  : "Connection completed"}
+                            </small>
+                          </span>
+                        ) : (
+                          "Not tested"
+                        )}
+                      </td>
                       <td>
                         <form action={sendDiscordTestAction}>
                           <input
@@ -227,48 +349,6 @@ export default function SettingsPage() {
           </form>
         </aside>
       </div>
-
-      <div className="section-title">
-        <div>
-          <h2>Delivery ledger</h2>
-          <p>Every attempted Discord notification records its outcome.</p>
-        </div>
-      </div>
-      <section className="panel">
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Channel</th>
-                <th>Status</th>
-                <th>HTTP</th>
-                <th>Detail</th>
-              </tr>
-            </thead>
-            <tbody>
-              {deliveries.map((delivery) => (
-                <tr key={String(delivery.id)} data-testid="delivery-row">
-                  <td>{formatDate(delivery.created_at)}</td>
-                  <td>{String(delivery.channel_name)}</td>
-                  <td>
-                    <StatusBadge value={delivery.status} />
-                  </td>
-                  <td>{String(delivery.response_code ?? "—")}</td>
-                  <td>{String(delivery.error_message ?? "Delivered")}</td>
-                </tr>
-              ))}
-              {!deliveries.length ? (
-                <tr>
-                  <td colSpan={5} className="empty-state">
-                    No delivery attempts yet.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
       {captures.length ? (
         <>

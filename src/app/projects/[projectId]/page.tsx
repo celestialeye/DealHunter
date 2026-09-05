@@ -22,6 +22,7 @@ import {
   createRuleAction,
   deleteRuleAction,
   runProjectScanAction,
+  updateProjectAlertDestinationsAction,
   updateProjectScheduleAction,
   updateRuleAction,
 } from "@/app/actions";
@@ -36,6 +37,7 @@ import {
 export const dynamic = "force-dynamic";
 
 type Row = Record<string, string | number | null>;
+type SearchValue = string | string[] | undefined;
 type ProjectView =
   | "overview"
   | "products"
@@ -44,6 +46,10 @@ type ProjectView =
   | "schedule"
   | "runs"
   | "setup";
+
+function searchValue(value: SearchValue) {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 const views: Array<{
   id: ProjectView;
@@ -130,13 +136,13 @@ function OverviewView({
   products,
   listings,
   rules,
-  monitoringRuns,
+  monitoringRunCount,
 }: {
   projectId: string;
   products: Row[];
   listings: Row[];
   rules: Row[];
-  monitoringRuns: Row[];
+  monitoringRunCount: number;
 }) {
   const navigation = [
     {
@@ -163,7 +169,7 @@ function OverviewView({
     {
       view: "runs",
       label: "Recorded checks",
-      value: monitoringRuns.length,
+      value: monitoringRunCount,
       detail: "Inspect every system observation.",
       icon: ScrollText,
     },
@@ -707,12 +713,19 @@ function RulesView({
   projectId,
   project,
   rules,
+  notificationChannels,
+  notificationDeliveries,
 }: {
   projectId: string;
   project: Row;
   rules: Row[];
+  notificationChannels: Row[];
+  notificationDeliveries: Row[];
 }) {
   const scheduleMode = String(project.default_schedule_mode ?? "SYSTEM");
+  const selectedChannels = notificationChannels.filter(
+    (channel) => Number(channel.selected) === 1,
+  );
   const scheduleSummary =
     scheduleMode === "FIXED"
       ? `Every ${Number(project.default_interval_seconds ?? 60)} seconds`
@@ -769,11 +782,79 @@ function RulesView({
             </span>
             <div>
               <small>3. Send alert</small>
-              <strong>Notify on the first match</strong>
-              <span>No repeat alert until the condition becomes false again.</span>
+              <strong>
+                {selectedChannels.length
+                  ? `Send to ${selectedChannels.length} project destination${selectedChannels.length === 1 ? "" : "s"}`
+                  : "Record in project alerts only"}
+              </strong>
+              <span>
+                No repeat alert until the condition becomes false again.
+              </span>
             </div>
           </article>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Project alert delivery</h2>
+            <p>
+              Select the system destinations that receive qualifying alerts
+              from this project.
+            </p>
+          </div>
+          <Bell size={18} />
+        </div>
+        <form
+          className="panel-body form-grid"
+          action={updateProjectAlertDestinationsAction}
+        >
+          <input type="hidden" name="projectId" value={projectId} />
+          {notificationChannels.length ? (
+            <div className="destination-list field-wide">
+              {notificationChannels.map((channel) => (
+                <label className="destination-option" key={String(channel.id)}>
+                  <input
+                    name="channelId"
+                    type="checkbox"
+                    value={String(channel.id)}
+                    defaultChecked={Number(channel.selected) === 1}
+                    data-testid="project-alert-channel"
+                  />
+                  <span>
+                    <strong>{String(channel.name)}</strong>
+                    <small>
+                      {String(channel.type)} webhook managed in system settings
+                    </small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className="rule-behavior-note field-wide">
+              No external destinations are configured. Alerts will remain in
+              this project&apos;s DealHunter history.{" "}
+              <Link className="inline-link" href="/settings">
+                Add a destination in Settings
+              </Link>
+              .
+            </div>
+          )}
+          <div className="rule-behavior-note field-wide">
+            Qualifying matches are always recorded in DealHunter. With no
+            destination selected, this project sends no external notification.
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-amber"
+              type="submit"
+              data-testid="save-project-alert-delivery"
+            >
+              Save alert delivery
+            </button>
+          </div>
+        </form>
       </section>
 
       <div className="section-grid section-grid-balanced">
@@ -958,6 +1039,58 @@ function RulesView({
         </form>
         </aside>
       </div>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Delivery ledger</h2>
+            <p>
+              External notification attempts generated by this project only.
+            </p>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Alert</th>
+                <th>Destination</th>
+                <th>Status</th>
+                <th>HTTP</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {notificationDeliveries.map((delivery) => (
+                <tr key={String(delivery.id)} data-testid="delivery-row">
+                  <td>{formatDate(delivery.created_at)}</td>
+                  <td className="primary-cell">
+                    <strong>{String(delivery.alert_title)}</strong>
+                    <small>{String(delivery.retailer ?? "Project alert")}</small>
+                  </td>
+                  <td>
+                    {String(delivery.channel_name)}{" "}
+                    <small>{String(delivery.channel_type)}</small>
+                  </td>
+                  <td>
+                    <StatusBadge value={delivery.status} />
+                  </td>
+                  <td>{String(delivery.response_code ?? "—")}</td>
+                  <td>{String(delivery.error_message ?? "Delivered")}</td>
+                </tr>
+              ))}
+              {!notificationDeliveries.length ? (
+                <tr>
+                  <td colSpan={6} className="empty-state">
+                    No external delivery attempts for this project.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1532,6 +1665,26 @@ function SetupView({ projectId }: { projectId: string }) {
             data-testid="url-target-quantity"
           />
         </div>
+        <div className="field">
+          <label htmlFor="url-selection-mode">Listing type</label>
+          <select
+            id="url-selection-mode"
+            name="selectionMode"
+            defaultValue="UNKNOWN"
+            data-testid="url-selection-mode"
+          >
+            <option value="UNKNOWN">Not classified yet</option>
+            <option value="EXACT">Exact product and variant</option>
+            <option value="CUSTOMER_CHOICE">
+              Customer chooses a variant
+            </option>
+            <option value="RANDOM_VARIANT">Random variant</option>
+            <option value="ASSORTMENT">Assortment listing</option>
+          </select>
+          <small>
+            Automatic cart actions require an exact product and variant.
+          </small>
+        </div>
         <button
           className="button button-amber"
           type="submit"
@@ -1550,28 +1703,38 @@ export default async function ProjectPage({
 }: {
   params: Promise<{ projectId: string }>;
   searchParams: Promise<{
-    view?: string;
-    runQuery?: string;
-    runProduct?: string;
-    runRetailer?: string;
-    runStatus?: string;
-    runAvailability?: string;
-    runSource?: string;
-    runPage?: string;
-    runPageSize?: string;
-    listingRetailer?: string;
-    listingStatus?: string;
+    view?: SearchValue;
+    runQuery?: SearchValue;
+    runProduct?: SearchValue;
+    runRetailer?: SearchValue;
+    runStatus?: SearchValue;
+    runAvailability?: SearchValue;
+    runSource?: SearchValue;
+    runPage?: SearchValue;
+    runPageSize?: SearchValue;
+    listingRetailer?: SearchValue;
+    listingStatus?: SearchValue;
   }>;
 }) {
   const { projectId } = await params;
-  const query = await searchParams;
+  const rawQuery = await searchParams;
+  const query = Object.fromEntries(
+    Object.entries(rawQuery).map(([key, value]) => [key, searchValue(value)]),
+  ) as Record<string, string | undefined>;
   const requestedView = query.view;
   const activeView = views.some((view) => view.id === requestedView)
     ? (requestedView as ProjectView)
     : "overview";
   const data = getProject(projectId);
   if (!data) notFound();
-  const { project, products, listings, rules, monitoringRuns } = data;
+  const {
+    project,
+    products,
+    listings,
+    rules,
+    notificationChannels,
+    notificationDeliveries,
+  } = data;
   const retailerFilter = listings.some(
     (listing) => String(listing.retailer) === query.listingRetailer,
   )
@@ -1627,7 +1790,7 @@ export default async function ProjectPage({
             products={products}
             listings={listings}
             rules={rules}
-            monitoringRuns={monitoringRuns}
+            monitoringRunCount={Number(project.monitoring_run_count ?? 0)}
           />
         ) : null}
         {activeView === "products" ? (
@@ -1642,7 +1805,13 @@ export default async function ProjectPage({
           />
         ) : null}
         {activeView === "rules" ? (
-          <RulesView projectId={projectId} project={project} rules={rules} />
+          <RulesView
+            projectId={projectId}
+            project={project}
+            rules={rules}
+            notificationChannels={notificationChannels}
+            notificationDeliveries={notificationDeliveries}
+          />
         ) : null}
         {activeView === "schedule" ? (
           <ScheduleView project={project} listings={listings} />

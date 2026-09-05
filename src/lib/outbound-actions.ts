@@ -44,6 +44,16 @@ export function validateTargetProductUrl(rawUrl: string): string {
   return url.toString();
 }
 
+export function extractTargetProductId(productUrl: string): string {
+  const match = new URL(validateTargetProductUrl(productUrl)).pathname.match(
+    /\/-\/(A-\d+)\/?$/,
+  );
+  if (!match) {
+    throw new Error("Target product URL does not contain a product ID.");
+  }
+  return match[1];
+}
+
 export function parseOutboundActionIssue(body: string): TargetCartAction {
   const actionType = readMarkdownField(body, "Action type");
   if (actionType !== SUPPORTED_ACTION_TYPE) {

@@ -12,6 +12,7 @@ describe("buildDiscordPayload", () => {
         project_id: "project-1",
         product_id: "product-1",
         product_name: "Booster Bundle",
+        retailer_id: null,
         retailer: "Mock Shop",
         title: "Six pack bundle",
         url: "https://mock.dealhunter.local/deal?price=14.99",
@@ -19,6 +20,7 @@ describe("buildDiscordPayload", () => {
         current_availability: "IN_STOCK",
         current_availability_text: "In Stock",
         selection_mode: "EXACT",
+        selection_mode_confirmed_at: new Date(0).toISOString(),
         interval_seconds: 60,
         schedule_mode: "SYSTEM",
         interval_min_seconds: 60,
@@ -33,6 +35,9 @@ describe("buildDiscordPayload", () => {
         last_observed_at: null,
         next_run_at: new Date(0).toISOString(),
         observation_count: 0,
+        product_auto_add_to_cart: 1,
+        product_auto_add_terms_version: "2026-09-01",
+        product_auto_add_enabled_at: new Date(0).toISOString(),
       },
     });
 

@@ -1,5 +1,10 @@
 import { createId, getDatabase, nowIso } from "@/lib/db";
 import { resolveChallenge } from "@/lib/challenges";
+import { extractTargetProductId } from "@/lib/outbound-actions";
+import {
+  cartProductKey,
+  updateCartEligibility,
+} from "@/lib/cart-actions";
 import {
   buildDiscordPayload,
   deliverAlertToDiscord,
@@ -31,6 +36,20 @@ function defaultAvailabilityText(value: Availability) {
     UNKNOWN: "Unknown",
   };
   return labels[value];
+}
+
+function productIdentityTokenMatches(value: string, productKey: string) {
+  const tokens = [
+    productKey,
+    productKey.replace(/^[A-Za-z]+-/, ""),
+  ].filter(Boolean);
+  return tokens.some((token) => {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `(^|[^A-Za-z0-9])${escaped}([^A-Za-z0-9]|$)`,
+      "i",
+    ).test(value);
+  });
 }
 
 export function isActionableAvailability(value: Availability) {
@@ -163,6 +182,8 @@ export function parseTargetProductSection(
   fallbackPriceCents: number | null,
   primaryCartEnabled = false,
   primaryCartPresent = false,
+  primaryPreorderEnabled = false,
+  primaryPreorderPresent = false,
 ) {
   const normalized = productSection.toLowerCase();
   const priceMatch = productSection.match(/\$(\d{1,5}(?:\.\d{2})?)/);
@@ -180,10 +201,11 @@ export function parseTargetProductSection(
     availability = "COMING_SOON";
     displayAvailabilityText =
       productSection.match(/coming soon/i)?.[0] ?? "Coming Soon";
-  } else if (normalized.includes("preorder")) {
-    availability = "PREORDER";
-    displayAvailabilityText =
-      productSection.match(/preorder/i)?.[0] ?? "Preorder";
+  } else if (normalized.includes("preorder") && primaryPreorderPresent) {
+    availability = primaryPreorderEnabled ? "PREORDER" : "OUT_OF_STOCK";
+    displayAvailabilityText = primaryPreorderEnabled
+      ? (productSection.match(/preorder/i)?.[0] ?? "Preorder")
+      : null;
   } else if (normalized.includes("add to cart") && primaryCartPresent) {
     availability = primaryCartEnabled ? "IN_STOCK" : "OUT_OF_STOCK";
     displayAvailabilityText = primaryCartEnabled ? "Add to cart" : null;
@@ -400,18 +422,35 @@ async function observeTargetWithBrowser(
       if (productSection === previousSection) break;
       previousSection = productSection;
     }
-    const primaryCart = page
-      .getByRole("button", { name: "Add to cart", exact: true })
+    const targetProductId = extractTargetProductId(listing.url).slice(2);
+    const primaryFulfillment = page
+      .locator(
+        `button[data-test="shippingButton"][id*="${targetProductId}"]`,
+      )
       .first();
-    const primaryCartPresent = (await primaryCart.count()) > 0;
+    const primaryFulfillmentPresent =
+      (await primaryFulfillment.count()) > 0;
+    const primaryFulfillmentText = primaryFulfillmentPresent
+      ? ((await primaryFulfillment.textContent()) ?? "").trim()
+      : "";
+    const primaryCartPresent =
+      primaryFulfillmentPresent &&
+      /add to cart/i.test(primaryFulfillmentText);
     const primaryCartEnabled =
-      primaryCartPresent && (await primaryCart.isEnabled());
+      primaryCartPresent && (await primaryFulfillment.isEnabled());
+    const primaryPreorderPresent =
+      primaryFulfillmentPresent &&
+      /pre-?order/i.test(primaryFulfillmentText);
+    const primaryPreorderEnabled =
+      primaryPreorderPresent && (await primaryFulfillment.isEnabled());
     const { availability, priceCents, displayAvailabilityText } =
       parseTargetProductSection(
       productSection,
       listing.current_price_cents,
       primaryCartEnabled,
       primaryCartPresent,
+      primaryPreorderEnabled,
+      primaryPreorderPresent,
       );
 
     return {
@@ -446,6 +485,249 @@ async function observeTargetWithBrowser(
   }
 }
 
+async function observeRetailerWithBrowser(
+  listing: ListingRecord,
+): Promise<ListingObservation> {
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({
+      locale: "en-US",
+      viewport: { width: 1365, height: 900 },
+    });
+    const response = await page.goto(listing.url, {
+      waitUntil: "domcontentloaded",
+      timeout: 45_000,
+    });
+    if (!response || response.status() === 403 || response.status() === 429) {
+      return {
+        availability: "UNKNOWN",
+        priceCents: listing.current_price_cents,
+        confidence: 0,
+        resultStatus:
+          response?.status() === 429 ? "RATE_LIMITED" : "CHALLENGE",
+        source: "BROWSER",
+        evidenceType: "NONE",
+        detail: `${listing.retailer} returned HTTP ${response?.status() ?? "unknown"}.`,
+      };
+    }
+
+    await page.locator("h1").first().waitFor({
+      state: "visible",
+      timeout: 25_000,
+    });
+    await page.waitForTimeout(2_000);
+    const productKey = cartProductKey(
+      listing.retailer_id ?? "",
+      listing.url,
+    );
+    let finalProductKey: string;
+    try {
+      finalProductKey = cartProductKey(
+        listing.retailer_id ?? "",
+        page.url(),
+      );
+    } catch {
+      return {
+        availability: "UNKNOWN",
+        priceCents: listing.current_price_cents,
+        confidence: 0,
+        resultStatus: "PARSE_ERROR",
+        source: "BROWSER",
+        evidenceType: "NONE",
+        detail: `${listing.retailer} redirected to an unsupported product URL.`,
+      };
+    }
+    if (finalProductKey !== productKey) {
+      return {
+        availability: "UNKNOWN",
+        priceCents: listing.current_price_cents,
+        confidence: 0,
+        resultStatus: "PARSE_ERROR",
+        source: "BROWSER",
+        evidenceType: "NONE",
+        detail: `${listing.retailer} redirected to a different product.`,
+      };
+    }
+    const result = await page.evaluate(() => {
+      const heading = document.querySelector("h1");
+      const title = heading?.textContent?.trim() ?? "";
+      const headingBox = heading?.getBoundingClientRect();
+      const bodyText = document.body?.innerText ?? "";
+      const start = title ? bodyText.indexOf(title) : -1;
+      const productSection =
+        start >= 0 ? bodyText.slice(start, start + 2_000) : bodyText.slice(0, 2_000);
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          'button, [role="button"], input[type="submit"], input[type="button"]',
+        ),
+      )
+        .map((element) => {
+          const box = element.getBoundingClientRect();
+          const name = (
+            element.getAttribute("aria-label") ||
+            element.getAttribute("value") ||
+            element.innerText ||
+            ""
+          ).trim();
+          const disabled =
+            element.hasAttribute("disabled") ||
+            element.getAttribute("aria-disabled") === "true";
+          const scopes: Array<{
+            identityValues: string[];
+            associatedLinks: string[];
+            purchaseControlCount: number;
+          }> = [];
+          let container: HTMLElement | null = element;
+          for (let depth = 0; depth < 5 && container; depth += 1) {
+            const identityValues = [
+              container.id,
+              container.getAttribute("data-sku-id"),
+              container.getAttribute("data-product-id"),
+              container.getAttribute("data-tcin"),
+            ].filter((value): value is string => Boolean(value));
+            const associatedLinks = Array.from(
+              container.querySelectorAll<HTMLAnchorElement>("a[href]"),
+            ).map((link) => link.href);
+            const purchaseControlCount = Array.from(
+              container.querySelectorAll<HTMLElement>(
+                'button, [role="button"], input[type="submit"], input[type="button"]',
+              ),
+            ).filter((control) =>
+              /\b(add to cart|add to bag|pre-?order)\b/i.test(
+                control.getAttribute("aria-label") ||
+                  control.getAttribute("value") ||
+                  control.innerText ||
+                  "",
+              ),
+            ).length;
+            scopes.push({
+              identityValues,
+              associatedLinks,
+              purchaseControlCount,
+            });
+            container = container.parentElement;
+          }
+          return {
+            name,
+            disabled,
+            scopes,
+            top: box.top,
+            width: box.width,
+            height: box.height,
+          };
+        })
+        .filter(
+          (candidate) =>
+            /\b(add to cart|pre-?order)\b/i.test(candidate.name) &&
+            candidate.width > 0 &&
+            candidate.height > 0 &&
+            (!headingBox || candidate.top >= headingBox.top - 100) &&
+            (!headingBox || candidate.top <= headingBox.top + 1_800),
+        )
+        .sort((left, right) => left.top - right.top);
+      return {
+        productSection,
+        candidates,
+      };
+    });
+    const control =
+      result.candidates.find(
+        (candidate) =>
+          candidate.scopes.some((scope) => {
+            const identityMatches = scope.identityValues.some((value) =>
+              productIdentityTokenMatches(value, productKey),
+            );
+            const associatedProductKeys = new Set(
+              scope.associatedLinks.flatMap((link) => {
+                try {
+                  return [
+                    cartProductKey(listing.retailer_id ?? "", link),
+                  ];
+                } catch {
+                  return [];
+                }
+              }),
+            );
+            const linkMatches =
+              associatedProductKeys.size === 1 &&
+              associatedProductKeys.has(productKey);
+            return (
+              scope.purchaseControlCount === 1 &&
+              (identityMatches || linkMatches)
+            );
+          }),
+      ) ?? null;
+
+    const priceMatch = result.productSection.match(
+      /\$(\d{1,5}(?:\.\d{2})?)/,
+    );
+    const priceCents = priceMatch
+      ? Math.round(Number(priceMatch[1]) * 100)
+      : listing.current_price_cents;
+    if (control) {
+      const preorder = /pre-?order/i.test(control.name);
+      const availability = control.disabled
+        ? "OUT_OF_STOCK"
+        : preorder
+          ? "PREORDER"
+          : "IN_STOCK";
+      return {
+        availability,
+        displayAvailabilityText: control.disabled
+          ? "Out of stock"
+          : control.name,
+        priceCents,
+        confidence: 0.95,
+        resultStatus: "SUCCESS",
+        source: "BROWSER",
+        evidenceType: "PRIMARY_CONTROL",
+        detail: `${listing.retailer} primary purchase control reported ${availability}.`,
+      };
+    }
+
+    const normalized = result.productSection.toLowerCase();
+    const availability = normalized.includes("out of stock")
+      ? "OUT_OF_STOCK"
+      : normalized.includes("coming soon")
+        ? "COMING_SOON"
+        : "UNKNOWN";
+    return {
+      availability,
+      displayAvailabilityText:
+        availability === "OUT_OF_STOCK"
+          ? "Out of stock"
+          : availability === "COMING_SOON"
+            ? "Coming soon"
+            : null,
+      priceCents,
+      confidence: availability === "UNKNOWN" ? 0.3 : 0.8,
+      resultStatus: availability === "UNKNOWN" ? "PARSE_ERROR" : "SUCCESS",
+      source: "BROWSER",
+      evidenceType: availability === "UNKNOWN" ? "NONE" : "PRIMARY_CONTROL",
+      detail:
+        availability === "UNKNOWN"
+          ? `${listing.retailer} rendered without an unambiguous primary purchase control.`
+          : `${listing.retailer} product section reported ${availability}.`,
+    };
+  } catch (error) {
+    return {
+      availability: "UNKNOWN",
+      priceCents: listing.current_price_cents,
+      confidence: 0,
+      resultStatus: "NETWORK_ERROR",
+      source: "BROWSER",
+      evidenceType: "NONE",
+      detail:
+        error instanceof Error
+          ? `${listing.retailer} browser observation failed: ${error.message}`
+          : `${listing.retailer} browser observation failed.`,
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 async function acquireObservation(
   listing: ListingRecord,
 ): Promise<ListingObservation> {
@@ -460,6 +742,12 @@ async function acquireObservation(
   }
   if (url.hostname === "target.com" || url.hostname.endsWith(".target.com")) {
     return observeTargetWithBrowser(listing);
+  }
+  if (
+    listing.product_auto_add_to_cart &&
+    listing.retailer_id?.startsWith("retailer-")
+  ) {
+    return observeRetailerWithBrowser(listing);
   }
 
   try {
@@ -613,16 +901,24 @@ async function confirmActionableObservation(
     observation.resultStatus !== "SUCCESS" ||
     !isActionableAvailability(observation.availability)
   ) {
-    return observation;
+    return {
+      initialObservation: observation,
+      finalObservation: observation,
+      freshlyConfirmedActionable: false,
+    };
   }
   if (!isAuthoritativePositive(observation)) {
     return {
-      ...observation,
-      availability: "UNKNOWN" as const,
-      confidence: 0,
-      resultStatus: "PARSE_ERROR" as const,
-      detail:
-        "Actionable availability candidate rejected because its evidence was not authoritative.",
+      initialObservation: observation,
+      finalObservation: {
+        ...observation,
+        availability: "UNKNOWN" as const,
+        confidence: 0,
+        resultStatus: "PARSE_ERROR" as const,
+        detail:
+          "Actionable availability candidate rejected because its evidence was not authoritative.",
+      },
+      freshlyConfirmedActionable: false,
     };
   }
 
@@ -637,9 +933,13 @@ async function confirmActionableObservation(
     isAuthoritativePositive(confirmation)
   ) {
     return {
-      ...confirmation,
-      confidence: Math.min(observation.confidence, confirmation.confidence),
-      detail: `${confirmation.detail ?? "Authoritative availability evidence."} Actionable availability confirmed by a fresh second observation.`,
+      initialObservation: observation,
+      finalObservation: {
+        ...confirmation,
+        confidence: Math.min(observation.confidence, confirmation.confidence),
+        detail: `${confirmation.detail ?? "Authoritative availability evidence."} Actionable availability confirmed by a fresh second observation.`,
+      },
+      freshlyConfirmedActionable: true,
     };
   }
   if (
@@ -647,15 +947,23 @@ async function confirmActionableObservation(
     confirmation.availability !== "UNKNOWN"
   ) {
     return {
-      ...confirmation,
-      detail: `${confirmation.detail ?? ""} Initial actionable availability candidate was rejected by confirmation.`,
+      initialObservation: observation,
+      finalObservation: {
+        ...confirmation,
+        detail: `${confirmation.detail ?? ""} Initial actionable availability candidate was rejected by confirmation.`,
+      },
+      freshlyConfirmedActionable: false,
     };
   }
   return {
-    ...confirmation,
-    availability: "UNKNOWN" as const,
-    confidence: 0,
-    detail: `Initial actionable availability candidate was not accepted because confirmation failed: ${confirmation.detail ?? confirmation.resultStatus}.`,
+    initialObservation: observation,
+    finalObservation: {
+      ...confirmation,
+      availability: "UNKNOWN" as const,
+      confidence: 0,
+      detail: `Initial actionable availability candidate was not accepted because confirmation failed: ${confirmation.detail ?? confirmation.resultStatus}.`,
+    },
+    freshlyConfirmedActionable: false,
   };
 }
 
@@ -873,6 +1181,7 @@ async function evaluateRules(
       current_availability: observation.availability,
     };
     await deliverAlertToDiscord(
+      listing.project_id,
       alertId,
       buildDiscordPayload({ title, message, listing: updatedListing }),
     );
@@ -884,6 +1193,9 @@ export async function observeListing(listingId: string) {
   const listing = database
     .prepare(
       `SELECT l.*, pr.project_id, pr.canonical_name AS product_name,
+        pr.auto_add_to_cart AS product_auto_add_to_cart,
+        pr.auto_add_terms_version AS product_auto_add_terms_version,
+        pr.auto_add_enabled_at AS product_auto_add_enabled_at,
         p.default_schedule_mode AS project_default_schedule_mode,
         p.default_interval_seconds AS project_default_interval_seconds,
         p.default_interval_min_seconds AS project_default_interval_min_seconds,
@@ -925,10 +1237,11 @@ export async function observeListing(listingId: string) {
     isActionableAvailability(initialObservation.availability)
       ? createId()
       : null;
-  const observation = await confirmActionableObservation(
+  const confirmation = await confirmActionableObservation(
     listing,
     initialObservation,
   );
+  const observation = confirmation.finalObservation;
   const observedAt = nowIso();
   const durationMs = Math.max(0, Math.round(performance.now() - started));
   const recentStatuses = database
@@ -1062,6 +1375,13 @@ export async function observeListing(listingId: string) {
         observation.detail ?? "",
         runId,
       );
+    updateCartEligibility(
+      database,
+      listing,
+      runId,
+      confirmationGroupId,
+      confirmation,
+    );
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -1095,7 +1415,9 @@ async function waitForScanPacing() {
   await new Promise((resolve) => setTimeout(resolve, pacingDelayMs));
 }
 
-export async function runDueScans() {
+export async function runDueScans(
+  afterObservation?: () => Promise<void>,
+) {
   const listings = getDatabase()
     .prepare(
       `SELECT id FROM listings
@@ -1106,6 +1428,7 @@ export async function runDueScans() {
     .all(nowIso()) as Array<{ id: string }>;
   for (const [index, listing] of listings.entries()) {
     await observeListing(listing.id);
+    await afterObservation?.();
     if (index < listings.length - 1) {
       await waitForScanPacing();
     }

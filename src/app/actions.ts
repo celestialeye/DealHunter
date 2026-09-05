@@ -8,6 +8,11 @@ import { audit, createId, getDatabase, nowIso } from "@/lib/db";
 import { formatAvailability } from "@/lib/format";
 import { calculateNextSchedule, runProjectScan } from "@/lib/monitoring";
 import {
+  CART_AUTOMATION_TERMS_VERSION,
+  revokeListingCartActions,
+  revokeProductCartActions,
+} from "@/lib/cart-actions";
+import {
   assertAllowedDiscordWebhook,
   sendDiscordTest,
 } from "@/lib/notifications";
@@ -181,6 +186,15 @@ export async function addProductAction(formData: FormData) {
 export async function addProductFromUrlAction(formData: FormData) {
   const projectId = text(formData, "projectId");
   const sourceUrl = new URL(text(formData, "url"));
+  const selectionMode = z
+    .enum([
+      "EXACT",
+      "CUSTOMER_CHOICE",
+      "RANDOM_VARIANT",
+      "ASSORTMENT",
+      "UNKNOWN",
+    ])
+    .parse(text(formData, "selectionMode") || "UNKNOWN");
   const normalizedUrl = sourceUrl.toString().toLowerCase().replace(/\/$/, "");
   const existing = getDatabase()
     .prepare("SELECT product_id FROM listings WHERE normalized_url = ?")
@@ -237,10 +251,11 @@ export async function addProductFromUrlAction(formData: FormData) {
         `INSERT INTO listings
          (id, product_id, retailer_id, retailer, retailer_sku, title, url,
           normalized_url, current_price_cents, current_availability,
-          current_availability_text, selection_mode, interval_seconds,
-          schedule_mode, schedule_reason, last_observed_at, next_run_at,
-          observation_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EXACT', 60, 'INHERIT', ?, ?, ?, 1, ?)`,
+          current_availability_text, selection_mode,
+          selection_mode_confirmed_at, interval_seconds, schedule_mode,
+          schedule_reason, last_observed_at, next_run_at, observation_count,
+          created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 60, 'INHERIT', ?, ?, ?, 1, ?)`,
       )
       .run(
         listingId,
@@ -254,6 +269,8 @@ export async function addProductFromUrlAction(formData: FormData) {
         crawled.priceCents,
         crawled.availability,
         formatAvailability(crawled.availability),
+        selectionMode,
+        selectionMode === "EXACT" ? now : null,
         initialSchedule.reason,
         now,
         nextRun,
@@ -328,8 +345,9 @@ export async function addListingAction(formData: FormData) {
       `INSERT INTO listings
        (id, product_id, retailer_id, retailer, title, url, normalized_url,
         current_price_cents, current_availability, selection_mode,
-        schedule_mode, interval_seconds, schedule_reason, next_run_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', ?, 'INHERIT', ?, ?, ?, ?)`,
+        selection_mode_confirmed_at, schedule_mode, interval_seconds,
+        schedule_reason, next_run_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', ?, ?, 'INHERIT', ?, ?, ?, ?)`,
     )
     .run(
       id,
@@ -340,7 +358,8 @@ export async function addListingAction(formData: FormData) {
       url.toString(),
       url.toString().toLowerCase().replace(/\/$/, ""),
       optionalMoney(text(formData, "price")),
-      text(formData, "selectionMode") || "EXACT",
+      text(formData, "selectionMode") || "UNKNOWN",
+      text(formData, "selectionMode") === "EXACT" ? now : null,
       Math.max(60, Number(text(formData, "interval") || "60")),
       initialSchedule.reason,
       new Date(
@@ -434,6 +453,61 @@ export async function updateListingScheduleAction(formData: FormData) {
   revalidatePath(`/products/${productId}`);
 }
 
+export async function updateProductAutoCartAction(formData: FormData) {
+  const productId = text(formData, "productId");
+  const enabled = formData.get("autoAddToCart") === "on";
+  const database = getDatabase();
+  const product = database
+    .prepare(
+      `SELECT id, project_id
+       FROM products
+       WHERE id = ?`,
+    )
+    .get(productId) as
+    | { id: string; project_id: string }
+    | undefined;
+  if (!product) {
+    throw new Error("Product auto-cart target was not found.");
+  }
+
+  const updatedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database
+      .prepare(
+        `UPDATE products
+         SET auto_add_to_cart = ?, auto_add_terms_version = ?,
+             auto_add_enabled_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        enabled ? 1 : 0,
+        CART_AUTOMATION_TERMS_VERSION,
+        enabled ? updatedAt : null,
+        productId,
+      );
+    if (!enabled) {
+      revokeProductCartActions(database, productId, updatedAt);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+
+  audit(
+    "product",
+    productId,
+    enabled ? "AUTO_CART_ENABLED" : "AUTO_CART_DISABLED",
+    enabled
+      ? `Enabled automatic ensure-one-in-cart actions across all listings under terms ${CART_AUTOMATION_TERMS_VERSION}; checkout remains disabled.`
+      : "Revoked automatic cart-add approval.",
+  );
+  revalidatePath(`/products/${productId}`);
+  revalidatePath(`/projects/${product.project_id}`);
+  revalidatePath("/settings");
+}
+
 export async function deleteListingAction(formData: FormData) {
   const listingId = text(formData, "listingId");
   const productId = text(formData, "productId");
@@ -452,9 +526,18 @@ export async function deleteListingAction(formData: FormData) {
     throw new Error("Listing to remove was not found.");
   }
 
-  database
-    .prepare("DELETE FROM listings WHERE id = ? AND product_id = ?")
-    .run(listingId, productId);
+  const updatedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    revokeListingCartActions(database, listingId, updatedAt);
+    database
+      .prepare("DELETE FROM listings WHERE id = ? AND product_id = ?")
+      .run(listingId, productId);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
   audit(
     "listing",
     listingId,
@@ -741,6 +824,66 @@ export async function deleteRuleAction(formData: FormData) {
   revalidatePath(`/projects/${projectId}`);
 }
 
+export async function updateProjectAlertDestinationsAction(
+  formData: FormData,
+) {
+  const projectId = text(formData, "projectId");
+  const database = getDatabase();
+  const project = database
+    .prepare("SELECT id FROM projects WHERE id = ?")
+    .get(projectId);
+  if (!project) {
+    throw new Error("Project was not found.");
+  }
+
+  const selectedIds = [
+    ...new Set(
+      formData
+        .getAll("channelId")
+        .map((value) => String(value).trim())
+        .filter(Boolean),
+    ),
+  ];
+  const availableIds = new Set(
+    (
+      database
+        .prepare("SELECT id FROM notification_channels WHERE enabled = 1")
+        .all() as Array<{ id: string }>
+    ).map((channel) => channel.id),
+  );
+  if (selectedIds.some((channelId) => !availableIds.has(channelId))) {
+    throw new Error("One or more alert destinations are unavailable.");
+  }
+
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database
+      .prepare("DELETE FROM project_notification_channels WHERE project_id = ?")
+      .run(projectId);
+    const insert = database.prepare(
+      `INSERT INTO project_notification_channels
+       (project_id, channel_id, created_at)
+       VALUES (?, ?, ?)`,
+    );
+    const createdAt = nowIso();
+    for (const channelId of selectedIds) {
+      insert.run(projectId, channelId, createdAt);
+    }
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+
+  audit(
+    "project",
+    projectId,
+    "ALERT_DESTINATIONS_UPDATED",
+    `Selected ${selectedIds.length} external alert destination(s).`,
+  );
+  revalidatePath(`/projects/${projectId}`);
+}
+
 export async function runProjectScanAction(formData: FormData) {
   const projectId = text(formData, "projectId");
   await runProjectScan(projectId);
@@ -794,6 +937,29 @@ export async function updateLearningSettingsAction(formData: FormData) {
     "default",
     "UPDATED",
     `DOM model=${domModel}; visual model=${visualModel}; screening=${screeningEngine}; effort=${effort}.`,
+  );
+  revalidatePath("/settings");
+}
+
+export async function updateCartAutomationProfileAction(formData: FormData) {
+  const profileName = z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .parse(text(formData, "chromeProfileName"));
+  getDatabase()
+    .prepare(
+      `UPDATE cart_automation_settings
+       SET chrome_profile_name = ?, updated_at = ?
+       WHERE id = 'default'`,
+    )
+    .run(profileName, nowIso());
+  audit(
+    "cart_automation_settings",
+    "default",
+    "PROFILE_UPDATED",
+    `Bound automatic cart actions to Chrome profile ${profileName}.`,
   );
   revalidatePath("/settings");
 }
